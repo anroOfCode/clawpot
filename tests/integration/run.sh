@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 

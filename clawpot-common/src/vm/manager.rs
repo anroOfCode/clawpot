@@ -32,6 +32,15 @@ impl VmManager {
     }
 
     /// Start the VM with the given configuration
+    #[tracing::instrument(
+        name = "vm.start",
+        skip(self, config),
+        fields(
+            socket_path = %self.socket_path.display(),
+            vcpu_count = config.vcpu_count,
+            mem_size_mib = config.mem_size_mib,
+        )
+    )]
     pub async fn start(&mut self, config: VmConfig) -> Result<()> {
         info!("Starting Firecracker VM...");
 
@@ -107,6 +116,7 @@ impl VmManager {
     }
 
     /// Wait for the Unix socket to become ready
+    #[tracing::instrument(name = "vm.wait_for_socket", skip(self))]
     async fn wait_for_socket(&self) -> Result<()> {
         info!("Waiting for socket to be ready...");
 
@@ -132,6 +142,7 @@ impl VmManager {
     }
 
     /// Configure the VM via Firecracker API
+    #[tracing::instrument(name = "vm.configure", skip_all)]
     async fn configure_vm(&self, config: VmConfig) -> Result<()> {
         info!("Configuring VM...");
 
@@ -216,6 +227,7 @@ impl VmManager {
     }
 
     /// Stop the VM
+    #[tracing::instrument(name = "vm.stop", skip(self), fields(socket_path = %self.socket_path.display()))]
     pub async fn stop(&mut self) -> Result<()> {
         info!("Stopping VM...");
 

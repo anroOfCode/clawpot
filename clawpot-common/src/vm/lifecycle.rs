@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use tracing::info;
 
 /// Possible states for a Firecracker VM
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +84,11 @@ impl VmLifecycle {
             ));
         }
 
+        let old_state = self.state;
         self.state = new_state;
+        if old_state != new_state {
+            info!(from = %old_state, to = %new_state, "vm.state_transition");
+        }
         Ok(())
     }
 }

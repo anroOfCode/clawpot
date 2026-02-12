@@ -23,6 +23,7 @@ impl AgentClient {
     /// 2. Send "CONNECT <port>\n"
     /// 3. Read "OK <port>\n" response
     /// 4. The stream is now connected to the guest's vsock listener
+    #[tracing::instrument(name = "agent.connect", skip_all, fields(vsock_path = %vsock_uds_path))]
     pub async fn connect(vsock_uds_path: String) -> Result<Self> {
         let path = vsock_uds_path.clone();
 
@@ -61,6 +62,7 @@ impl AgentClient {
     }
 
     /// Wait for the agent to become ready, retrying with backoff.
+    #[tracing::instrument(name = "agent.wait_ready", skip_all, fields(timeout_secs = timeout.as_secs()))]
     pub async fn wait_ready(vsock_uds_path: &str, timeout: Duration) -> Result<Self> {
         let start = std::time::Instant::now();
         let interval = Duration::from_millis(500);
@@ -100,6 +102,7 @@ impl AgentClient {
     }
 
     /// Execute a command and return the result
+    #[tracing::instrument(name = "agent.exec", skip_all, fields(command = %req.command))]
     pub async fn exec(&mut self, req: ExecRequest) -> Result<ExecResponse> {
         let response = self
             .inner

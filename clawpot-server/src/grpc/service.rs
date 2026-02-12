@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Span};
 use uuid::Uuid;
 
 const GUEST_CID: u32 = 3;
@@ -48,11 +48,26 @@ impl ClawpotServiceImpl {
 
 #[tonic::async_trait]
 impl ClawpotService for ClawpotServiceImpl {
+    #[tracing::instrument(
+        name = "grpc.CreateVM",
+        skip_all,
+        fields(
+            vm_id = tracing::field::Empty,
+            vcpu_count = tracing::field::Empty,
+            mem_size_mib = tracing::field::Empty,
+            ip_address = tracing::field::Empty,
+        )
+    )]
     async fn create_vm(
         &self,
         request: Request<CreateVmRequest>,
     ) -> Result<Response<CreateVmResponse>, Status> {
         let req = request.into_inner();
+        let span = Span::current();
+        let vcpu_count_val = req.vcpu_count.unwrap_or(1);
+        let mem_size_mib_val = req.mem_size_mib.unwrap_or(256);
+        span.record("vcpu_count", vcpu_count_val);
+        span.record("mem_size_mib", mem_size_mib_val);
         info!(
             "CreateVM request: vcpus={:?}, memory={:?}",
             req.vcpu_count, req.mem_size_mib
@@ -60,6 +75,7 @@ impl ClawpotService for ClawpotServiceImpl {
 
         // Generate VM ID
         let vm_id = Uuid::new_v4();
+        span.record("vm_id", vm_id.to_string().as_str());
         info!("Generated VM ID: {}", vm_id);
 
         // Allocate IP address
@@ -73,6 +89,7 @@ impl ClawpotService for ClawpotServiceImpl {
                 Status::resource_exhausted(format!("No available IP addresses: {}", e))
             })?;
 
+        span.record("ip_address", ip_address.to_string().as_str());
         info!("Allocated IP address: {}", ip_address);
 
         // Create TAP device name (max 15 chars for Linux interface names)
@@ -162,11 +179,13 @@ impl ClawpotService for ClawpotServiceImpl {
         }))
     }
 
+    #[tracing::instrument(name = "grpc.DeleteVM", skip_all, fields(vm_id = tracing::field::Empty))]
     async fn delete_vm(
         &self,
         request: Request<DeleteVmRequest>,
     ) -> Result<Response<DeleteVmResponse>, Status> {
         let req = request.into_inner();
+        Span::current().record("vm_id", req.vm_id.as_str());
         info!("DeleteVM request: vm_id={}", req.vm_id);
 
         let vm_id = Uuid::parse_str(&req.vm_id).map_err(|e| {
@@ -204,6 +223,7 @@ impl ClawpotService for ClawpotServiceImpl {
         Ok(Response::new(DeleteVmResponse { success: true }))
     }
 
+    #[tracing::instrument(name = "grpc.ListVMs", skip_all, fields(vm_count = tracing::field::Empty))]
     async fn list_v_ms(
         &self,
         _request: Request<ListVmsRequest>,
@@ -232,16 +252,25 @@ impl ClawpotService for ClawpotServiceImpl {
             })
             .collect();
 
+        Span::current().record("vm_count", vms.len());
         info!("Returning {} VMs", vms.len());
 
         Ok(Response::new(ListVmsResponse { vms }))
     }
 
+    #[tracing::instrument(
+        name = "grpc.ExecVM",
+        skip_all,
+        fields(vm_id = tracing::field::Empty, command = tracing::field::Empty, exit_code = tracing::field::Empty)
+    )]
     async fn exec_vm(
         &self,
         request: Request<ExecVmRequest>,
     ) -> Result<Response<ExecVmResponse>, Status> {
         let req = request.into_inner();
+        let span = Span::current();
+        span.record("vm_id", req.vm_id.as_str());
+        span.record("command", req.command.as_str());
         info!("ExecVM request: vm_id={}, cmd={}", req.vm_id, req.command);
 
         let vm_id = Uuid::parse_str(&req.vm_id).map_err(|e| {
@@ -270,6 +299,8 @@ impl ClawpotService for ClawpotServiceImpl {
             Status::internal(format!("Agent exec failed: {}", e))
         })?;
 
+        span.record("exit_code", agent_resp.exit_code);
+
         Ok(Response::new(ExecVmResponse {
             exit_code: agent_resp.exit_code,
             stdout: agent_resp.stdout,
@@ -280,6 +311,7 @@ impl ClawpotService for ClawpotServiceImpl {
     type ExecVMStreamStream =
         tokio_stream::wrappers::ReceiverStream<Result<ExecVmStreamOutput, Status>>;
 
+    #[tracing::instrument(name = "grpc.ExecVMStream", skip_all)]
     async fn exec_vm_stream(
         &self,
         _request: Request<tonic::Streaming<ExecVmStreamInput>>,

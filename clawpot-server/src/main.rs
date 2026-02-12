@@ -1,6 +1,7 @@
 mod agent;
 mod grpc;
 mod network;
+mod telemetry;
 mod vm;
 
 use anyhow::{Context, Result};
@@ -17,11 +18,9 @@ use vm::VmRegistry;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_level(true)
-        .init();
+    // Initialize telemetry (stdout logging + OTLP export)
+    let tracer_provider = telemetry::init_telemetry()
+        .expect("Failed to initialize telemetry");
 
     info!("Starting clawpot-server...");
 
@@ -97,23 +96,37 @@ async fn main() -> Result<()> {
 
     info!("Server shut down successfully");
 
+    // Flush remaining spans before exit
+    if let Err(e) = tracer_provider.shutdown() {
+        error!("Failed to shut down tracer provider: {}", e);
+    }
+
     Ok(())
 }
 
 /// Graceful shutdown handler
+#[tracing::instrument(name = "server.shutdown", skip_all)]
 async fn shutdown_signal(
     registry: Arc<VmRegistry>,
     network_manager: Arc<NetworkManager>,
     ip_allocator: Arc<Mutex<IpAllocator>>,
 ) {
-    // Wait for Ctrl+C
-    match signal::ctrl_c().await {
-        Ok(()) => {
-            info!("Received Ctrl+C, initiating graceful shutdown...");
+    // Wait for SIGINT (Ctrl+C) or SIGTERM
+    let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("Failed to register SIGTERM handler");
+
+    tokio::select! {
+        result = signal::ctrl_c() => {
+            match result {
+                Ok(()) => info!("Received SIGINT, initiating graceful shutdown..."),
+                Err(err) => {
+                    error!("Failed to listen for SIGINT: {}", err);
+                    return;
+                }
+            }
         }
-        Err(err) => {
-            error!("Failed to listen for Ctrl+C: {}", err);
-            return;
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, initiating graceful shutdown...");
         }
     }
 
@@ -124,6 +137,7 @@ async fn shutdown_signal(
     info!("Found {} VMs to clean up", vms_list.len());
 
     for (vm_id, ip_address, tap_name, _, _, _) in vms_list {
+        let _cleanup_span = tracing::info_span!("shutdown.cleanup_vm", vm_id = %vm_id).entered();
         info!("Cleaning up VM {}", vm_id);
 
         // Remove from registry and stop VM

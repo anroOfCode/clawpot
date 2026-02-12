@@ -34,6 +34,7 @@ impl NetworkManager {
     /// 1. Creating the TAP device
     /// 2. Attaching it to the bridge
     /// 3. Adding iptables rule to enforce source IP
+    #[tracing::instrument(name = "network.create_tap", skip(self), fields(tap_name = %tap_name, ip = %ip))]
     pub fn create_tap(&self, tap_name: &str, ip: IpAddr) -> Result<()> {
         // Create TAP device and bring it up
         tap::create_tap(tap_name)?;
@@ -56,6 +57,7 @@ impl NetworkManager {
     /// This includes:
     /// 1. Removing iptables rules
     /// 2. Deleting the TAP device
+    #[tracing::instrument(name = "network.delete_tap", skip(self), fields(tap_name = %tap_name, ip = %ip))]
     pub fn delete_tap(&self, tap_name: &str, ip: IpAddr) -> Result<()> {
         // Remove iptables rule (best effort)
         let _ = iptables::remove_source_ip_rule(tap_name, ip);

@@ -15,7 +15,11 @@ prost = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+tracing-opentelemetry = { workspace = true }
 ipnetwork = "0.20"
 bitvec = "1.0"
 nix = { version = "0.29", features = ["user"] }

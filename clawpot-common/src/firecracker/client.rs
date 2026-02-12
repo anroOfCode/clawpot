@@ -37,6 +37,7 @@ impl FirecrackerClient {
     }
 
     /// Make a PUT request to the Firecracker API
+    #[tracing::instrument(name = "firecracker.put", skip(self, body), fields(path = %path))]
     async fn put<T: serde::Serialize>(&self, path: &str, body: &T) -> Result<()> {
         let uri = self.build_uri(path)?;
         let json = serde_json::to_string(body).context("Failed to serialize request body")?;
@@ -85,6 +86,7 @@ impl FirecrackerClient {
     }
 
     /// Make a GET request to the Firecracker API
+    #[tracing::instrument(name = "firecracker.get", skip(self), fields(path = %path))]
     async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
         let uri = self.build_uri(path)?;
 
