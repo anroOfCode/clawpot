@@ -39,6 +39,16 @@ enum Commands {
 
     /// List all VMs
     List,
+
+    /// Execute a command in a VM
+    Exec {
+        /// VM ID
+        vm_id: String,
+
+        /// Command and arguments to execute
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -62,6 +72,9 @@ async fn main() -> Result<()> {
         }
         Commands::List => {
             commands::list::execute(&mut client).await?;
+        }
+        Commands::Exec { vm_id, command } => {
+            commands::exec::execute(&mut client, vm_id, command).await?;
         }
     }
 

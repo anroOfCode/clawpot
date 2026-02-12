@@ -18,6 +18,7 @@ pub struct VmEntry {
     pub created_at: SystemTime,
     pub vcpu_count: u8,
     pub mem_size_mib: u32,
+    pub vsock_uds_path: String,
 }
 
 /// Thread-safe VM registry for managing multiple VMs
@@ -109,6 +110,15 @@ impl VmRegistry {
             entry.created_at,
         ))
     }
+
+    /// Get the vsock UDS path for a VM
+    pub async fn get_vsock_path(&self, id: &VmId) -> Result<String> {
+        let vms = self.vms.read().await;
+        let entry = vms
+            .get(id)
+            .ok_or_else(|| anyhow!("VM with ID {} not found", id))?;
+        Ok(entry.vsock_uds_path.clone())
+    }
 }
 
 impl Default for VmRegistry {
@@ -135,6 +145,7 @@ mod tests {
             created_at: SystemTime::now(),
             vcpu_count: 2,
             mem_size_mib: 512,
+            vsock_uds_path: "/tmp/test-vsock.sock".to_string(),
         };
 
         registry.insert(id, entry).await.unwrap();
@@ -156,6 +167,7 @@ mod tests {
             created_at: SystemTime::now(),
             vcpu_count: 2,
             mem_size_mib: 512,
+            vsock_uds_path: "/tmp/test-vsock.sock".to_string(),
         };
 
         registry.insert(id, entry).await.unwrap();
@@ -179,6 +191,7 @@ mod tests {
                 created_at: SystemTime::now(),
                 vcpu_count: 1,
                 mem_size_mib: 256,
+                vsock_uds_path: format!("/tmp/test-{}-vsock.sock", i),
             };
             registry.insert(id, entry).await.unwrap();
         }

@@ -3,6 +3,7 @@ members = [
     "clawpot-common",
     "clawpot-server",
     "clawpot-cli",
+    "clawpot-agent",
 ]
 resolver = "2"
 

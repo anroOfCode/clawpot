@@ -1,9 +1,9 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(true)
-        .build_client(true)
+        .build_client(false)
         .compile_protos(
-            &["../proto/clawpot.proto", "../proto/clawpot_agent.proto"],
+            &["../proto/clawpot_agent.proto"],
             &["../proto"],
         )?;
     Ok(())

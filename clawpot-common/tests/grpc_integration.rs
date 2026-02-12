@@ -6,8 +6,9 @@
 use clawpot_common::proto::{
     clawpot_service_client::ClawpotServiceClient,
     clawpot_service_server::{ClawpotService, ClawpotServiceServer},
-    CreateVmRequest, CreateVmResponse, DeleteVmRequest, DeleteVmResponse, ListVmsRequest,
-    ListVmsResponse, VmInfo, VmState as ProtoVmState,
+    CreateVmRequest, CreateVmResponse, DeleteVmRequest, DeleteVmResponse, ExecVmRequest,
+    ExecVmResponse, ExecVmStreamInput, ExecVmStreamOutput, ListVmsRequest, ListVmsResponse,
+    VmInfo, VmState as ProtoVmState,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -87,6 +88,30 @@ impl ClawpotService for MockClawpotService {
         let vms = self.vms.lock().await;
         let vm_list: Vec<VmInfo> = vms.values().cloned().collect();
         Ok(Response::new(ListVmsResponse { vms: vm_list }))
+    }
+
+    async fn exec_vm(
+        &self,
+        request: Request<ExecVmRequest>,
+    ) -> Result<Response<ExecVmResponse>, Status> {
+        let req = request.into_inner();
+        // Mock: just echo the command back as stdout
+        let output = format!("mock exec: {} {:?}\n", req.command, req.args);
+        Ok(Response::new(ExecVmResponse {
+            exit_code: 0,
+            stdout: output.into_bytes(),
+            stderr: Vec::new(),
+        }))
+    }
+
+    type ExecVMStreamStream =
+        tokio_stream::wrappers::ReceiverStream<Result<ExecVmStreamOutput, Status>>;
+
+    async fn exec_vm_stream(
+        &self,
+        _request: Request<tonic::Streaming<ExecVmStreamInput>>,
+    ) -> Result<Response<Self::ExecVMStreamStream>, Status> {
+        Err(Status::unimplemented("not implemented in mock"))
     }
 }
 

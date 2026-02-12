@@ -1,3 +1,4 @@
+mod agent;
 mod grpc;
 mod network;
 mod vm;
