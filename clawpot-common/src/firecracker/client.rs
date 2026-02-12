@@ -174,4 +174,19 @@ impl FirecrackerClient {
             .await
             .context("Failed to get instance info")
     }
+
+    /// Set a network interface configuration
+    pub async fn set_network_interface(&self, iface: NetworkInterface) -> Result<()> {
+        let path = format!("/network-interfaces/{}", iface.iface_id);
+        self.put(&path, &iface)
+            .await
+            .context("Failed to set network interface")
+    }
+
+    /// Set the vsock device configuration
+    pub async fn set_vsock(&self, vsock: VsockDevice) -> Result<()> {
+        self.put("/vsock", &vsock)
+            .await
+            .context("Failed to set vsock device")
+    }
 }

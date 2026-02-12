@@ -76,3 +76,24 @@ pub struct ErrorResponse {
     /// Error message
     pub fault_message: String,
 }
+
+/// Vsock device configuration for Firecracker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VsockDevice {
+    /// Guest CID (Context ID)
+    pub guest_cid: u32,
+    /// Path to the host-side Unix Domain Socket
+    pub uds_path: String,
+}
+
+/// Network interface configuration for Firecracker
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInterface {
+    /// Interface ID (e.g., "eth0")
+    pub iface_id: String,
+    /// Host device name (TAP device name)
+    pub host_dev_name: String,
+    /// Optional guest MAC address
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guest_mac: Option<String>,
+}

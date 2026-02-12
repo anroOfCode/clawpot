@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target/
+clawpot-driver/target/
+**/*.rs.bk
+Cargo.lock
+
+# Downloaded VM assets
+/assets/kernels/
+/assets/rootfs/
+
+# Firecracker runtime files
+*.sock
+*.log
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

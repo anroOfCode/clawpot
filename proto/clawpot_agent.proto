@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package clawpot.agent.v1;
+
+service AgentService {
+  // Run a command, wait for completion, return output
+  rpc Exec(ExecRequest) returns (ExecResponse);
+
+  // Bidirectional streaming exec with stdin/stdout piping
+  rpc ExecStream(stream ExecStreamInput) returns (stream ExecStreamOutput);
+
+  // Health check for readiness probing
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message ExecRequest {
+  string command = 1;
+  repeated string args = 2;
+  map<string, string> env = 3;
+  string working_dir = 4;
+}
+
+message ExecResponse {
+  int32 exit_code = 1;
+  bytes stdout = 2;
+  bytes stderr = 3;
+}
+
+message ExecStreamInput {
+  oneof input {
+    ExecRequest start = 1;
+    bytes stdin_data = 2;
+    bool close_stdin = 3;
+  }
+}
+
+message ExecStreamOutput {
+  oneof output {
+    bytes stdout_data = 1;
+    bytes stderr_data = 2;
+    int32 exit_code = 3;
+  }
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string version = 1;
+  uint64 uptime_secs = 2;
+}

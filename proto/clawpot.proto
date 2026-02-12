@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package clawpot.v1;
+
+service ClawpotService {
+  rpc CreateVM(CreateVmRequest) returns (CreateVmResponse);
+  rpc DeleteVM(DeleteVmRequest) returns (DeleteVmResponse);
+  rpc ListVMs(ListVmsRequest) returns (ListVmsResponse);
+
+  // Execute a command in a VM (unary)
+  rpc ExecVM(ExecVmRequest) returns (ExecVmResponse);
+
+  // Execute a command in a VM with stdin/stdout streaming
+  rpc ExecVMStream(stream ExecVmStreamInput) returns (stream ExecVmStreamOutput);
+}
+
+message CreateVmRequest {
+  optional uint32 vcpu_count = 1;    // Default: 1
+  optional uint32 mem_size_mib = 2;  // Default: 256
+}
+
+message CreateVmResponse {
+  string vm_id = 1;        // UUID
+  string ip_address = 2;   // Assigned IP
+  string socket_path = 3;  // Firecracker socket
+}
+
+message DeleteVmRequest {
+  string vm_id = 1;
+}
+
+message DeleteVmResponse {
+  bool success = 1;
+}
+
+message ListVmsRequest {}
+
+message ListVmsResponse {
+  repeated VmInfo vms = 1;
+}
+
+message VmInfo {
+  string vm_id = 1;
+  VmState state = 2;
+  string ip_address = 3;
+  uint32 vcpu_count = 4;
+  uint32 mem_size_mib = 5;
+  int64 created_at = 6;  // Unix timestamp
+  string socket_path = 7;
+}
+
+message ExecVmRequest {
+  string vm_id = 1;
+  string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  string working_dir = 5;
+}
+
+message ExecVmResponse {
+  int32 exit_code = 1;
+  bytes stdout = 2;
+  bytes stderr = 3;
+}
+
+message ExecVmStreamInput {
+  oneof input {
+    ExecVmStreamStart start = 1;
+    bytes stdin_data = 2;
+    bool close_stdin = 3;
+  }
+}
+
+message ExecVmStreamStart {
+  string vm_id = 1;
+  string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  string working_dir = 5;
+}
+
+message ExecVmStreamOutput {
+  oneof output {
+    bytes stdout_data = 1;
+    bytes stderr_data = 2;
+    int32 exit_code = 3;
+  }
+}
+
+enum VmState {
+  VM_STATE_UNSPECIFIED = 0;
+  VM_STATE_STARTING = 1;
+  VM_STATE_RUNNING = 2;
+  VM_STATE_STOPPING = 3;
+  VM_STATE_STOPPED = 4;
+  VM_STATE_ERROR = 5;
+}

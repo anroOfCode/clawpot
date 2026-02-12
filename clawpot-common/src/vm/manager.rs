@@ -181,6 +181,35 @@ impl VmManager {
             .await
             .context("Failed to set machine config")?;
 
+        // Set network interface if configured
+        if let (Some(tap_device), Some(_ip)) = (&config.tap_device, &config.ip_address) {
+            debug!("Setting network interface: {}", tap_device);
+            let network_interface = crate::firecracker::NetworkInterface {
+                iface_id: "eth0".to_string(),
+                host_dev_name: tap_device.clone(),
+                guest_mac: None,
+            };
+            self.client
+                .set_network_interface(network_interface)
+                .await
+                .context("Failed to set network interface")?;
+        }
+
+        // Set vsock device if configured
+        if let (Some(guest_cid), Some(uds_path)) =
+            (config.guest_cid, &config.vsock_uds_path)
+        {
+            debug!("Setting vsock device: CID={}, UDS={}", guest_cid, uds_path);
+            let vsock = crate::firecracker::VsockDevice {
+                guest_cid,
+                uds_path: uds_path.clone(),
+            };
+            self.client
+                .set_vsock(vsock)
+                .await
+                .context("Failed to set vsock device")?;
+        }
+
         info!("VM configured successfully");
 
         Ok(())

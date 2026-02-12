@@ -13,6 +13,14 @@ pub struct VmConfig {
     pub mem_size_mib: u32,
     /// Boot arguments for the kernel
     pub boot_args: String,
+    /// TAP device name for networking
+    pub tap_device: Option<String>,
+    /// IP address for the VM
+    pub ip_address: Option<String>,
+    /// Guest CID for vsock
+    pub guest_cid: Option<u32>,
+    /// Path to the host-side vsock Unix Domain Socket
+    pub vsock_uds_path: Option<String>,
 }
 
 impl VmConfig {
@@ -29,6 +37,10 @@ impl VmConfig {
             vcpu_count: 1,
             mem_size_mib: 256,
             boot_args: "console=ttyS0 reboot=k panic=1 pci=off".to_string(),
+            tap_device: None,
+            ip_address: None,
+            guest_cid: None,
+            vsock_uds_path: None,
         }
     }
 
@@ -47,6 +59,27 @@ impl VmConfig {
     /// Set custom boot arguments
     pub fn with_boot_args(mut self, args: String) -> Self {
         self.boot_args = args;
+        self
+    }
+
+    /// Configure networking with TAP device and IP address
+    /// Automatically updates boot args to include IP configuration
+    pub fn with_network(mut self, tap_device: String, ip_address: String) -> Self {
+        self.tap_device = Some(tap_device);
+        self.ip_address = Some(ip_address.clone());
+
+        // Update boot args to include IP configuration
+        // Format: ip=<client-ip>::<gw-ip>:<netmask>::<device>:<autoconf>
+        let ip_config = format!("ip={}::192.168.100.1:255.255.255.0::eth0:off", ip_address);
+        self.boot_args = format!("console=ttyS0 reboot=k panic=1 pci=off {}", ip_config);
+
+        self
+    }
+
+    /// Configure vsock device for guest-host communication
+    pub fn with_vsock(mut self, guest_cid: u32, uds_path: String) -> Self {
+        self.guest_cid = Some(guest_cid);
+        self.vsock_uds_path = Some(uds_path);
         self
     }
 
