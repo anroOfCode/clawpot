@@ -111,20 +111,23 @@ def server():
     log.info("STARTING SERVER")
     log.info("=" * 60)
 
-    # Build server + CLI first
-    log.info("Building server and CLI...")
-    build = subprocess.run(
-        ["cargo", "build", "-p", "clawpot-server", "-p", "clawpot-cli"],
-        capture_output=True,
-        cwd=PROJECT_ROOT,
-        env=SERVER_ENV,
-        timeout=120,
-    )
-    if build.returncode != 0:
-        log.error("Build failed:\n%s", build.stderr.decode())
-        pytest.fail("cargo build failed")
+    # Build server + CLI if not already present (e.g. pre-built in CI)
+    if os.path.isfile(SERVER_BIN) and os.path.isfile(CLI_BIN):
+        log.info("Pre-built binaries found, skipping cargo build")
+    else:
+        log.info("Building server and CLI...")
+        build = subprocess.run(
+            ["cargo", "build", "-p", "clawpot-server", "-p", "clawpot-cli"],
+            capture_output=True,
+            cwd=PROJECT_ROOT,
+            env=SERVER_ENV,
+            timeout=120,
+        )
+        if build.returncode != 0:
+            log.error("Build failed:\n%s", build.stderr.decode())
+            pytest.fail("cargo build failed")
 
-    log.info("Build succeeded")
+        log.info("Build succeeded")
 
     assert os.path.isfile(SERVER_BIN), f"Server binary not found: {SERVER_BIN}"
     assert os.path.isfile(CLI_BIN), f"CLI binary not found: {CLI_BIN}"

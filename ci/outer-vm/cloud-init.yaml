@@ -1,0 +1,109 @@
+#cloud-config
+# Cloud-init user-data for the Clawpot CI outer VM.
+# This VM runs the Buildkite agent, builds the project, and manages
+# ephemeral inner VMs for integration testing.
+#
+# The Buildkite agent runs as the "buildkite-agent" user (created by the
+# buildkite-agent package). All build tools are installed for that user.
+
+hostname: clawpot-ci
+
+users:
+  - default
+  - name: ci
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: kvm, libvirt
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP2aiE6VbAVyl59JiK+I9JIbEj2JFGgIsiwqRpf3Wzhf clawpot-ci-access
+
+package_update: true
+
+packages:
+  # Build essentials (Rust compilation)
+  - build-essential
+  - pkg-config
+  - libssl-dev
+  - protobuf-compiler
+  - musl-tools
+  # Inner VM management
+  - qemu-system-x86
+  - qemu-utils
+  - cloud-image-utils
+  # General utilities
+  - curl
+  - git
+  - jq
+  - openssh-client
+
+runcmd:
+  # --- Buildkite agent (install first so the user exists) ---
+  - |
+    curl -fsSL https://keys.openpgp.org/vks/v1/by-fingerprint/32A37959C2FA5C3C99EFBC32A79206696452D198 \
+      | gpg --dearmor -o /usr/share/keyrings/buildkite-agent-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/buildkite-agent-archive-keyring.gpg] https://apt.buildkite.com/buildkite-agent stable main" \
+      > /etc/apt/sources.list.d/buildkite-agent.list
+    apt-get update -qq
+    apt-get install -y buildkite-agent
+
+  # --- Give buildkite-agent a real login shell and home dir ---
+  - usermod -s /bin/bash buildkite-agent
+  - usermod -aG kvm,libvirt buildkite-agent
+  - |
+    # Ensure home directory exists and is usable
+    mkdir -p /var/lib/buildkite-agent
+    chown buildkite-agent:buildkite-agent /var/lib/buildkite-agent
+
+  # --- Passwordless sudo for buildkite-agent (needed for inner VM management) ---
+  - echo "buildkite-agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/buildkite-agent
+
+  # --- Rust toolchain (as buildkite-agent) ---
+  - su - buildkite-agent -c 'curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+  - su - buildkite-agent -c '. ~/.cargo/env && rustup target add x86_64-unknown-linux-musl'
+
+  # --- Python / uv (as buildkite-agent) ---
+  - su - buildkite-agent -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+
+  # --- Configure Buildkite agent ---
+  - |
+    cat > /etc/buildkite-agent/buildkite-agent.cfg << 'AGENTCFG'
+    token="REPLACE_WITH_AGENT_TOKEN"
+    name="clawpot-ci-%hostname-%n"
+    tags="queue=clawpot,os=linux,kvm=true"
+    build-path="/var/lib/buildkite-agent/builds"
+    hooks-path="/etc/buildkite-agent/hooks"
+    plugins-path="/etc/buildkite-agent/plugins"
+    AGENTCFG
+
+  # --- Environment hook so agent finds cargo/uv ---
+  - |
+    cat > /etc/buildkite-agent/hooks/environment << 'HOOK'
+    #!/bin/bash
+    export PATH="/var/lib/buildkite-agent/.cargo/bin:/var/lib/buildkite-agent/.local/bin:$PATH"
+    export CARGO_HOME="/var/lib/buildkite-agent/.cargo"
+    export RUSTUP_HOME="/var/lib/buildkite-agent/.rustup"
+    HOOK
+    chmod +x /etc/buildkite-agent/hooks/environment
+
+  # --- Download Ubuntu 24.04 cloud image for inner VMs ---
+  - |
+    INNER_IMG_DIR="/var/lib/clawpot-ci"
+    mkdir -p "$INNER_IMG_DIR"
+    if [ ! -f "$INNER_IMG_DIR/ubuntu-24.04-cloudimg.img" ]; then
+        curl -fsSL --progress-bar \
+            "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img" \
+            -o "$INNER_IMG_DIR/ubuntu-24.04-cloudimg.img"
+    fi
+    chown -R buildkite-agent:buildkite-agent "$INNER_IMG_DIR"
+
+  # --- Generate SSH keypair for inner VM access ---
+  - |
+    CI_SSH_DIR="/var/lib/clawpot-ci/ssh"
+    mkdir -p "$CI_SSH_DIR"
+    if [ ! -f "$CI_SSH_DIR/id_ed25519" ]; then
+        ssh-keygen -t ed25519 -f "$CI_SSH_DIR/id_ed25519" -N "" -C "clawpot-ci"
+    fi
+    chown -R buildkite-agent:buildkite-agent "$CI_SSH_DIR"
+
+  # --- Enable and start Buildkite agent ---
+  - systemctl enable --now buildkite-agent

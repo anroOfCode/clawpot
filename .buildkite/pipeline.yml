@@ -1,0 +1,16 @@
+agents:
+  queue: "clawpot"
+
+steps:
+  - label: ":rust: Build & Unit Tests"
+    key: "build"
+    command: .buildkite/scripts/build.sh
+    timeout_in_minutes: 15
+
+  - label: ":fire: Integration Tests"
+    key: "integration"
+    depends_on: "build"
+    command: .buildkite/scripts/integration.sh
+    timeout_in_minutes: 20
+    artifact_paths:
+      - "artifacts/*"
