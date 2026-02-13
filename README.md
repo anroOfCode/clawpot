@@ -1,282 +1,118 @@
 # Clawpot
 
-A Firecracker-based microVM driver for running lightweight, isolated Linux VMs with minimal overhead.
-
-## Overview
-
-Clawpot provides a simple Rust-based CLI tool for managing Firecracker VMs. It handles VM lifecycle management including starting, stopping, and monitoring virtual machines running minimal Ubuntu images.
-
-## Features
-
-- Fast VM boot times (under 1 second)
-- Simple CLI interface for VM management
-- Minimal resource overhead
-- Automated VM asset downloading
-- Clean lifecycle management with proper cleanup
+Firecracker microVM orchestration system. A gRPC-based server manages VM lifecycle, networking, and guest command execution, with a CLI client and an in-VM agent.
 
 ## Prerequisites
 
-- Linux host with KVM support
-- `/dev/kvm` accessible (for hardware virtualization)
-- Firecracker v1.9.1 or later installed
-- Rust toolchain (for building)
+- Linux host with KVM support (`/dev/kvm`)
+- Firecracker v1.9.1+ installed
+- Rust toolchain
+- Root access (for TAP devices, bridge, iptables)
 
-### Checking KVM Support
-
-```bash
-# Check if KVM device exists
-ls -l /dev/kvm
-
-# Check KVM kernel module
-lsmod | grep kvm
-```
-
-If the KVM module is not loaded:
-```bash
-# For Intel processors
-sudo modprobe kvm_intel
-
-# For AMD processors
-sudo modprobe kvm_amd
-```
-
-## Installation
-
-### 1. Install Firecracker
-
-If using the devcontainer, Firecracker is already installed. Otherwise:
+## Quick Start
 
 ```bash
-FIRECRACKER_VERSION="v1.9.1"
-ARCH="$(uname -m)"
+# Build everything
+cargo build --workspace
 
-curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${ARCH}.tgz" -o /tmp/firecracker.tgz
+# Build the guest agent (static musl binary)
+cargo build --release --target x86_64-unknown-linux-musl -p clawpot-agent
 
-tar -xzf /tmp/firecracker.tgz -C /tmp
-sudo mv /tmp/release-${FIRECRACKER_VERSION}-${ARCH}/firecracker-${FIRECRACKER_VERSION}-${ARCH} /usr/local/bin/firecracker
-sudo chmod +x /usr/local/bin/firecracker
-
-firecracker --version
-```
-
-### 2. Download VM Assets
-
-Download the kernel and root filesystem images:
-
-```bash
+# Download kernel and rootfs
 ./scripts/install-vm-assets.sh
+
+# Inject the agent into the rootfs
+sudo ./scripts/setup-rootfs.sh
+
+# Start the server (requires root)
+sudo target/debug/clawpot-server
+
+# In another terminal — create a VM
+clawpot create --vcpus 2 --memory 512
+
+# List VMs
+clawpot list
+
+# Run a command inside a VM
+clawpot exec <vm_id> -- uname -a
+
+# Delete a VM
+clawpot delete <vm_id>
 ```
-
-This will download:
-- Linux kernel (vmlinux) - ~80MB
-- Ubuntu minimal rootfs - ~300MB
-
-Assets are stored in `assets/kernels/` and `assets/rootfs/`.
-
-### 3. Build clawpot-driver
-
-```bash
-cd clawpot-driver
-cargo build --release
-```
-
-The binary will be available at `target/release/clawpot-driver`.
-
-## Usage
-
-### Starting a VM
-
-```bash
-sudo ./clawpot-driver/target/release/clawpot-driver start \
-  --kernel assets/kernels/vmlinux \
-  --rootfs assets/rootfs/ubuntu.ext4
-```
-
-With custom resources:
-
-```bash
-sudo ./clawpot-driver/target/release/clawpot-driver start \
-  --kernel assets/kernels/vmlinux \
-  --rootfs assets/rootfs/ubuntu.ext4 \
-  --vcpus 2 \
-  --memory 512
-```
-
-The VM will start and run until you press Ctrl+C.
-
-### Checking VM Status
-
-In another terminal:
-
-```bash
-sudo ./clawpot-driver/target/release/clawpot-driver status
-```
-
-### Stopping a VM
-
-The VM will automatically stop when you press Ctrl+C in the terminal running the `start` command.
-
-Alternatively, you can stop it manually:
-
-```bash
-sudo ./clawpot-driver/target/release/clawpot-driver stop
-```
-
-## CLI Reference
-
-### `clawpot-driver start`
-
-Start a Firecracker VM.
-
-**Options:**
-- `--kernel <PATH>` - Path to kernel image (required)
-- `--rootfs <PATH>` - Path to rootfs image (required)
-- `--vcpus <N>` - Number of virtual CPUs (default: 1)
-- `--memory <MB>` - Memory in MiB (default: 256)
-- `--socket <PATH>` - Socket path for Firecracker API (default: /tmp/firecracker.sock)
-
-### `clawpot-driver stop`
-
-Stop a running VM.
-
-**Options:**
-- `--socket <PATH>` - Socket path for Firecracker API (default: /tmp/firecracker.sock)
-
-### `clawpot-driver status`
-
-Get the status of a running VM.
-
-**Options:**
-- `--socket <PATH>` - Socket path for Firecracker API (default: /tmp/firecracker.sock)
 
 ## Architecture
 
-### Components
-
-1. **Installation Script** (`scripts/install-vm-assets.sh`)
-   - Downloads pre-built kernel and rootfs images
-   - Validates downloads
-   - Idempotent (safe to run multiple times)
-
-2. **Firecracker Module** (`clawpot-driver/src/firecracker/`)
-   - `client.rs` - HTTP client for Firecracker Unix socket API
-   - `config.rs` - VM configuration builder
-   - `models.rs` - Data models for API requests/responses
-
-3. **VM Module** (`clawpot-driver/src/vm/`)
-   - `manager.rs` - High-level VM lifecycle manager
-   - `lifecycle.rs` - State machine for VM states
-
-4. **CLI** (`clawpot-driver/src/main.rs`)
-   - Command-line interface
-   - Argument parsing and command routing
-
-### VM Lifecycle
-
 ```
-NotStarted → Starting → Running → Stopping → Stopped
-                ↓           ↓
-              Error       Error
+┌──────────┐  gRPC   ┌─────────────────┐  vsock   ┌───────────────┐
+│  clawpot  │───────>│  clawpot-server  │────────>│  clawpot-agent │
+│   (CLI)   │ :50051 │  (VM manager)    │  :10051 │  (in-guest)    │
+└──────────┘        └─────────────────┘          └───────────────┘
 ```
 
-The VM manager handles:
-1. Starting Firecracker process with Unix socket
-2. Waiting for socket to be ready
-3. Configuring VM via API (boot source, drives, CPU/memory)
-4. Starting the instance
-5. Monitoring and cleanup
+- **clawpot-server** — gRPC server that manages Firecracker microVMs. Handles VM creation/deletion, TAP networking (bridge `clawpot-br0`, subnet `192.168.100.0/24`), and proxies command execution to guest agents over vsock.
+- **clawpot-cli** — CLI client (`clawpot`). Connects to the server at `127.0.0.1:50051` (configurable via `--server`).
+- **clawpot-agent** — Guest agent that runs inside each microVM. Listens on vsock port 10051 and executes commands on behalf of the server. Built as a static musl binary.
+- **clawpot-common** — Shared library: Firecracker HTTP client, VM manager, protobuf types.
 
-## Troubleshooting
-
-### "No such device" error
-
-Ensure KVM is available:
-```bash
-ls -l /dev/kvm
-lsmod | grep kvm
-```
-
-### "Permission denied on /dev/kvm"
-
-Run with `sudo` or add your user to the `kvm` group:
-```bash
-sudo usermod -aG kvm $USER
-# Log out and back in for changes to take effect
-```
-
-### "Socket already exists"
-
-Clean up stale socket files:
-```bash
-rm /tmp/firecracker.sock
-```
-
-### VM doesn't boot
-
-- Verify kernel and rootfs paths are correct
-- Check files exist and are not corrupted
-- Review Firecracker logs for errors
-
-## Development
-
-### Project Structure
+## CLI Reference
 
 ```
-clawpot/
-├── assets/                   # VM assets (kernel, rootfs)
-│   ├── kernels/
-│   └── rootfs/
-├── scripts/
-│   └── install-vm-assets.sh  # Asset installation script
-├── clawpot-driver/           # Rust application
-│   ├── src/
-│   │   ├── firecracker/      # Firecracker API client
-│   │   ├── vm/               # VM lifecycle management
-│   │   └── main.rs           # CLI entry point
-│   └── Cargo.toml
-└── README.md
+clawpot [--server <URL>] <command>
 ```
 
-### Building from Source
+| Command  | Description | Arguments |
+|----------|-------------|-----------|
+| `create` | Create a new VM | `--vcpus <N>` (default: 1), `--memory <MiB>` (default: 256) |
+| `delete` | Delete a VM | `<vm_id>` |
+| `list`   | List all VMs | — |
+| `exec`   | Run a command in a VM | `<vm_id> -- <command> [args...]` |
 
-```bash
-# Install Rust if not already installed
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+## Testing
 
-# Build debug version
-cd clawpot-driver
-cargo build
-
-# Build release version
-cargo build --release
-
-# Run tests
-cargo test
-```
-
-### Running Tests
+### Unit tests
 
 ```bash
 cargo test --workspace
 ```
 
-## Future Enhancements
+### Integration tests (local)
 
-Potential improvements for future versions:
+Requires root and `/dev/kvm`. Spins up Firecracker microVMs end-to-end.
 
-- Networking support (TAP devices, NAT)
-- Multiple VM instance management
-- Jailer integration for sandboxing
-- Custom kernel/rootfs builder scripts
-- Metrics and monitoring
-- Interactive console access
+```bash
+cd tests/integration
+sudo -E $(which uv) run pytest -v -s --timeout=120
+```
 
-## License
+### Integration tests (CI)
 
-This project is provided as-is for educational and development purposes.
+CI runs on Buildkite with nested KVM. Push and monitor:
+
+```bash
+git push
+python utils/monitor_build.py HEAD
+```
+
+The pipeline builds the workspace, packages binaries and assets, launches an ephemeral QEMU inner VM, and runs the integration tests inside it. On failure, `monitor_build.py` prints the full logs for failed jobs.
+
+## Project Structure
+
+```
+clawpot/
+├── clawpot-server/        # gRPC server — VM lifecycle, networking
+├── clawpot-cli/           # CLI client (binary: clawpot)
+├── clawpot-agent/         # Guest agent (static musl binary)
+├── clawpot-common/        # Shared library — Firecracker client, proto types
+├── proto/                 # Protobuf service definitions
+├── assets/                # VM kernel and rootfs
+├── scripts/               # Asset download and rootfs setup
+├── tests/integration/     # End-to-end pytest suite
+├── ci/                    # CI infrastructure (VM provisioning, golden image)
+├── .buildkite/            # Pipeline definition and build/test scripts
+└── utils/                 # Developer utilities (build monitor)
+```
 
 ## Resources
 
 - [Firecracker Documentation](https://github.com/firecracker-microvm/firecracker/tree/main/docs)
 - [Firecracker Getting Started](https://github.com/firecracker-microvm/firecracker/blob/main/docs/getting-started.md)
-- [Firecracker Rootfs Setup](https://github.com/firecracker-microvm/firecracker/blob/main/docs/rootfs-and-kernel-setup.md)
