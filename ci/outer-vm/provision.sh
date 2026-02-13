@@ -84,18 +84,83 @@ virt-install \
     --noautoconsole \
     --import
 
+info "VM '$VM_NAME' created, waiting for cloud-init to complete..."
+
+# --- Locate the CI SSH key (used for both VM access and GitHub deploy key) ---
+
+CI_SSH_KEY="/home/${SUDO_USER:-$USER}/.ssh/clawpot-ci"
+if [ ! -f "$CI_SSH_KEY" ]; then
+    error "CI SSH key not found at $CI_SSH_KEY"
+    error "Run ci/host-setup.sh first"
+    exit 1
+fi
+
+# --- Wait for VM to get an IP and SSH to become available ---
+
+info "Waiting for SSH..."
+VM_IP=""
+for i in $(seq 1 60); do
+    VM_IP=$(virsh domifaddr "$VM_NAME" 2>/dev/null | grep -oP '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+    if [ -n "$VM_IP" ]; then
+        if ssh -i "$CI_SSH_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=3 -o BatchMode=yes \
+            "ci@$VM_IP" "echo ok" &>/dev/null; then
+            break
+        fi
+    fi
+    sleep 10
+done
+
+if [ -z "$VM_IP" ]; then
+    error "Timed out waiting for VM IP"
+    exit 1
+fi
+
+info "VM is reachable at $VM_IP"
+
+# --- Wait for cloud-init to finish ---
+
+info "Waiting for cloud-init..."
+SSH_CMD="ssh -i $CI_SSH_KEY -o StrictHostKeyChecking=no ci@$VM_IP"
+for i in $(seq 1 60); do
+    STATUS=$($SSH_CMD "cloud-init status 2>/dev/null" 2>/dev/null || echo "unknown")
+    if echo "$STATUS" | grep -qE "done|error"; then
+        break
+    fi
+    sleep 15
+done
+
+if echo "$STATUS" | grep -q "error"; then
+    error "cloud-init finished with errors"
+    $SSH_CMD "cloud-init status --long" 2>&1 || true
+    exit 1
+fi
+
+info "cloud-init complete"
+
+# --- Copy CI SSH key to buildkite-agent for GitHub access ---
+
+info "Configuring GitHub SSH access for buildkite-agent..."
+scp -i "$CI_SSH_KEY" -o StrictHostKeyChecking=no "$CI_SSH_KEY" "ci@$VM_IP:/tmp/ci-deploy-key" >/dev/null 2>&1
+
+$SSH_CMD bash -s << 'REMOTE'
+sudo mkdir -p /var/lib/buildkite-agent/.ssh
+sudo mv /tmp/ci-deploy-key /var/lib/buildkite-agent/.ssh/id_ed25519
+sudo chown -R buildkite-agent:buildkite-agent /var/lib/buildkite-agent/.ssh
+sudo chmod 700 /var/lib/buildkite-agent/.ssh
+sudo chmod 600 /var/lib/buildkite-agent/.ssh/id_ed25519
+sudo su - buildkite-agent -c 'ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null'
+REMOTE
+
+info "GitHub SSH access configured"
+
+# --- Done ---
+
 echo ""
 info "============================================"
-info "  VM '$VM_NAME' created and booting"
+info "  VM '$VM_NAME' is ready"
 info "============================================"
 echo ""
-info "cloud-init will install all dependencies (~5-10 minutes on first boot)."
-echo ""
-info "Monitor progress:"
-info "  virsh console $VM_NAME"
-echo ""
-info "Get VM IP:"
-info "  virsh domifaddr $VM_NAME"
-echo ""
-info "SSH in (after cloud-init completes):"
-info "  ssh buildkite@\$(virsh domifaddr $VM_NAME | grep -oP '[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+')"
+info "  IP:  $VM_IP"
+info "  SSH: ssh -i $CI_SSH_KEY ci@$VM_IP"
+info ""
+info "Buildkite agent is running. Trigger a build to verify."

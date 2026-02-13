@@ -23,6 +23,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# --- Ensure golden image is up to date ---
+echo "--- :framed_picture: Check inner VM golden image"
+
+GOLDEN_IMG="/var/lib/clawpot-ci/inner-vm.qcow2"
+GOLDEN_HASH_FILE="$GOLDEN_IMG.sha256"
+BUILD_IMAGE_SCRIPT="$CI_DIR/build-image.sh"
+
+CURRENT_HASH=$(sha256sum "$BUILD_IMAGE_SCRIPT" | awk '{print $1}')
+STORED_HASH=""
+if [ -f "$GOLDEN_HASH_FILE" ]; then
+    STORED_HASH=$(cat "$GOLDEN_HASH_FILE")
+fi
+
+if [ ! -f "$GOLDEN_IMG" ] || [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+    if [ ! -f "$GOLDEN_IMG" ]; then
+        echo "Golden image not found, building..."
+    else
+        echo "build-image.sh has changed, rebuilding golden image..."
+    fi
+    sudo bash "$BUILD_IMAGE_SCRIPT"
+else
+    echo "Golden image is up to date"
+fi
+
 # --- Launch inner VM ---
 echo "--- :rocket: Launch ephemeral inner VM"
 CONN_ENV=$("$CI_DIR/launch.sh" "${BUILDKITE_JOB_ID:-$(date +%s)}")

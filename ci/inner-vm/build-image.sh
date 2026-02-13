@@ -165,6 +165,11 @@ info "Golden image built successfully"
 GOLDEN_SIZE=$(qemu-img info --output=json "$GOLDEN_IMG" | jq -r '.["actual-size"]')
 info "Golden image actual size: $(numfmt --to=iec-i --suffix=B "$GOLDEN_SIZE" 2>/dev/null || echo "${GOLDEN_SIZE} bytes")"
 
+# Store a hash of this script so we can detect when a rebuild is needed
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+sha256sum "$SCRIPT_PATH" | awk '{print $1}' > "$GOLDEN_IMG.sha256"
+info "Stored build hash at $GOLDEN_IMG.sha256"
+
 echo ""
 info "============================================"
 info "  Golden inner VM image ready"
