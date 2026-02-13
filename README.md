@@ -257,8 +257,7 @@ cargo test
 ### Running Tests
 
 ```bash
-cd clawpot-driver
-cargo test
+cargo test --workspace
 ```
 
 ## Future Enhancements
