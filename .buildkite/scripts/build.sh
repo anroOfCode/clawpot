@@ -7,6 +7,30 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+CACHE_DIR="/var/lib/clawpot-ci/cache"
+
+# --- Restore caches ---
+echo "--- :arrow_down: Restore caches"
+
+# Cargo target cache
+if [ -d "$CACHE_DIR/target" ]; then
+    echo "Restoring cargo target cache..."
+    rsync -a --delete "$CACHE_DIR/target/" "$PROJECT_ROOT/target/"
+    echo "Cargo cache restored"
+else
+    echo "No cargo target cache found, building from scratch"
+fi
+
+# VM asset cache
+if [ -d "$CACHE_DIR/assets" ]; then
+    echo "Restoring VM asset cache..."
+    mkdir -p "$PROJECT_ROOT/assets"
+    rsync -a "$CACHE_DIR/assets/" "$PROJECT_ROOT/assets/"
+    echo "VM asset cache restored"
+else
+    echo "No VM asset cache found"
+fi
+
 echo "--- :rust: Build workspace (debug)"
 cargo build --workspace
 
@@ -18,6 +42,19 @@ cargo test --workspace
 
 echo "--- :package: Download VM assets"
 ./scripts/install-vm-assets.sh
+
+# --- Save caches ---
+echo "--- :arrow_up: Save caches"
+
+mkdir -p "$CACHE_DIR"
+
+echo "Saving cargo target cache..."
+rsync -a --delete "$PROJECT_ROOT/target/" "$CACHE_DIR/target/"
+echo "Cargo cache saved"
+
+echo "Saving VM asset cache..."
+rsync -a "$PROJECT_ROOT/assets/" "$CACHE_DIR/assets/"
+echo "VM asset cache saved"
 
 echo "--- :package: Package build tarball"
 
