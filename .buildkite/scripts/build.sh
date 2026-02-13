@@ -57,3 +57,6 @@ tar -czf "$TARBALL" -C "$STAGING" clawpot
 
 TARBALL_SIZE=$(stat -c%s "$TARBALL" 2>/dev/null || stat -f%z "$TARBALL" 2>/dev/null)
 echo "Tarball: $TARBALL ($(numfmt --to=iec-i --suffix=B "$TARBALL_SIZE" 2>/dev/null || echo "${TARBALL_SIZE} bytes"))"
+
+echo "--- :arrow_up: Upload tarball artifact"
+buildkite-agent artifact upload build.tar.gz

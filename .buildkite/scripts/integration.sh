@@ -59,14 +59,18 @@ SCP_CMD="scp $SSH_OPTS -i $INNER_VM_SSH_KEY -P $INNER_VM_SSH_PORT"
 
 echo "Inner VM ready (PID: $INNER_VM_PID, SSH port: $INNER_VM_SSH_PORT)"
 
-# --- Transfer build tarball ---
-echo "--- :arrow_up: Upload build tarball"
+# --- Download build tarball from build step ---
+echo "--- :arrow_down: Download build tarball"
 
 TARBALL="$PROJECT_ROOT/build.tar.gz"
+buildkite-agent artifact download build.tar.gz .
 if [ ! -f "$TARBALL" ]; then
-    echo "ERROR: build.tar.gz not found. Build step must run first." >&2
+    echo "ERROR: build.tar.gz not found. Build step must have uploaded it." >&2
     exit 1
 fi
+
+# --- Transfer build tarball to inner VM ---
+echo "--- :arrow_up: Upload build tarball to inner VM"
 
 $SCP_CMD "$TARBALL" "${INNER_VM_SSH_USER}@${INNER_VM_SSH_HOST}:/work/build.tar.gz"
 echo "Tarball uploaded"
