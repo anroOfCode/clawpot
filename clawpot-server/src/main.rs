@@ -9,8 +9,10 @@ use anyhow::{Context, Result};
 use clawpot_common::proto::clawpot_service_server::ClawpotServiceServer;
 use grpc::ClawpotServiceImpl;
 use network::{ip_allocator::IpAllocator, NetworkManager};
+use proxy::auth_client::AuthClient;
+use proxy::body_store::BodyStore;
 use proxy::ca::CertificateAuthority;
-use proxy::envoy::EnvoyManager;
+use proxy::db::RequestDb;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
@@ -50,37 +52,72 @@ async fn main() -> Result<()> {
 
     info!("Network bridge ready ✓");
 
-    // Initialize CA and proxy infrastructure
+    // Initialize CA
     let ca_dir = project_root.join("ca");
     let ca = Arc::new(
         CertificateAuthority::new(&ca_dir).context("Failed to initialize CA")?,
     );
     info!("Certificate authority ready ✓");
 
-    // Start TLS MITM proxy
+    // Initialize request database
+    let db_path = project_root.join("data/network_requests.db");
+    let db = RequestDb::new(&db_path).context("Failed to initialize request database")?;
+    info!("Request database ready ✓");
+
+    // Initialize body store
+    let body_store_dir = project_root.join("data/bodies");
+    let body_store = Arc::new(
+        BodyStore::new(&body_store_dir).context("Failed to initialize body store")?,
+    );
+    info!("Body store ready ✓");
+
+    // Initialize authorization client
+    let auth_addr = std::env::var("CLAWPOT_AUTH_ADDR").ok();
+    let auth = Arc::new(
+        AuthClient::new(auth_addr.as_deref())
+            .await
+            .context("Failed to initialize auth client")?,
+    );
+    info!("Authorization client ready ✓");
+
+    // Create shared cancellation channel
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+
+    // Start TLS MITM proxy
     let mitm_ca = ca.clone();
+    let mitm_cancel = cancel_rx.clone();
     let _mitm_handle = tokio::spawn(async move {
-        proxy::tls_mitm::run(mitm_ca, cancel_rx).await;
+        proxy::tls_mitm::run(mitm_ca, mitm_cancel).await;
     });
     info!("TLS MITM proxy started ✓");
 
-    // Start Envoy proxy
-    let envoy_config_dir = project_root.join("envoy");
-    let envoy_manager = Arc::new(Mutex::new(
-        EnvoyManager::start(&envoy_config_dir)
-            .await
-            .context("Failed to start Envoy proxy")?,
-    ));
-    info!("Envoy proxy started ✓");
-
-    // Initialize IP allocator
+    // Initialize IP allocator and VM registry (before HTTP proxy so registry is available)
     let ip_allocator = Arc::new(Mutex::new(IpAllocator::new()));
     info!("IP allocator initialized (192.168.100.2-254) ✓");
 
-    // Create VM registry
     let vm_registry = Arc::new(VmRegistry::new());
     info!("VM registry initialized ✓");
+
+    // Start HTTP proxy
+    let http_registry = vm_registry.clone();
+    let http_db = db.clone();
+    let http_body_store = body_store.clone();
+    let http_auth = auth.clone();
+    let http_cancel = cancel_rx.clone();
+    let _http_handle = tokio::spawn(async move {
+        proxy::http_proxy::run(http_registry, http_db, http_body_store, http_auth, http_cancel).await;
+    });
+    info!("HTTP proxy started ✓");
+
+    // Start DNS proxy
+    let dns_registry = vm_registry.clone();
+    let dns_db = db.clone();
+    let dns_auth = auth.clone();
+    let dns_cancel = cancel_rx.clone();
+    let _dns_handle = tokio::spawn(async move {
+        proxy::dns_proxy::run(dns_registry, dns_db, dns_auth, dns_cancel).await;
+    });
+    info!("DNS proxy started ✓");
 
     let kernel_path = project_root.join("assets/kernels/vmlinux");
     let rootfs_path = project_root.join("assets/rootfs/ubuntu.ext4");
@@ -124,7 +161,6 @@ async fn main() -> Result<()> {
                 vm_registry,
                 network_manager,
                 ip_allocator,
-                envoy_manager,
                 cancel_tx,
             ),
         )
@@ -147,8 +183,7 @@ async fn shutdown_signal(
     registry: Arc<VmRegistry>,
     network_manager: Arc<NetworkManager>,
     ip_allocator: Arc<Mutex<IpAllocator>>,
-    envoy_manager: Arc<Mutex<EnvoyManager>>,
-    mitm_cancel: tokio::sync::watch::Sender<bool>,
+    cancel_tx: tokio::sync::watch::Sender<bool>,
 ) {
     // Wait for SIGINT (Ctrl+C) or SIGTERM
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
@@ -207,8 +242,7 @@ async fn shutdown_signal(
 
     // Stop proxy infrastructure
     info!("Stopping proxy infrastructure...");
-    let _ = mitm_cancel.send(true);
-    envoy_manager.lock().await.stop().await;
+    let _ = cancel_tx.send(true);
     network::iptables::remove_proxy_rules(network_manager.bridge_name());
 
     info!("All VMs cleaned up. Server shutting down.");

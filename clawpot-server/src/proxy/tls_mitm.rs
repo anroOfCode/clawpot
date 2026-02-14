@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use super::ca::CertificateAuthority;
 
 const MITM_LISTEN_ADDR: &str = "0.0.0.0:10443";
-const ENVOY_HTTPS_ADDR: &str = "127.0.0.1:10081";
+const HTTP_PROXY_TLS_ADDR: &str = "127.0.0.1:10081";
 
 /// Start the TLS MITM proxy. Runs until the cancellation token is triggered.
 pub async fn run(ca: Arc<CertificateAuthority>, cancel: tokio::sync::watch::Receiver<bool>) {
@@ -73,16 +73,16 @@ async fn handle_connection(stream: TcpStream, ca: Arc<CertificateAuthority>) -> 
     let tls_stream = acceptor.accept(stream).await
         .context("TLS handshake failed")?;
 
-    // Connect to Envoy's decrypted HTTPS listener
-    let envoy_stream = TcpStream::connect(ENVOY_HTTPS_ADDR).await
-        .with_context(|| format!("Failed to connect to Envoy at {}", ENVOY_HTTPS_ADDR))?;
+    // Connect to HTTP proxy's TLS-upstream listener
+    let proxy_stream = TcpStream::connect(HTTP_PROXY_TLS_ADDR).await
+        .with_context(|| format!("Failed to connect to HTTP proxy at {}", HTTP_PROXY_TLS_ADDR))?;
 
-    // Bidirectional copy between TLS stream and Envoy
+    // Bidirectional copy between TLS stream and HTTP proxy
     let (mut tls_read, mut tls_write) = tokio::io::split(tls_stream);
-    let (mut envoy_read, mut envoy_write) = tokio::io::split(envoy_stream);
+    let (mut proxy_read, mut proxy_write) = tokio::io::split(proxy_stream);
 
-    let c2e = tokio::spawn(async move { copy(&mut tls_read, &mut envoy_write).await });
-    let e2c = tokio::spawn(async move { copy(&mut envoy_read, &mut tls_write).await });
+    let c2e = tokio::spawn(async move { copy(&mut tls_read, &mut proxy_write).await });
+    let e2c = tokio::spawn(async move { copy(&mut proxy_read, &mut tls_write).await });
 
     let _ = tokio::try_join!(c2e, e2c);
     Ok(())

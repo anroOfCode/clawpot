@@ -102,7 +102,7 @@ fi
 # Set DNS resolver
 info "Configuring DNS resolver..."
 cat > "$MOUNT_POINT/etc/resolv.conf" << 'DNS'
-nameserver 8.8.8.8
+nameserver 192.168.100.1
 DNS
 
 info "Rootfs updated successfully with clawpot-agent!"

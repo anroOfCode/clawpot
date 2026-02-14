@@ -262,18 +262,18 @@ class TestE2E:
 
         stdout_dns, _, _ = cli("exec", _vm_id, "--", "cat", "/etc/resolv.conf")
         log.info("VM DNS config:\n%s", stdout_dns.strip())
-        assert "8.8.8.8" in stdout_dns, "Expected nameserver 8.8.8.8 in resolv.conf"
+        assert "192.168.100.1" in stdout_dns, "Expected nameserver 192.168.100.1 in resolv.conf"
 
-        # Resolve a well-known domain via DNS
+        # Test DNS resolution via the DNS proxy (resolves through gateway)
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "timeout 10 bash -c '(echo > /dev/tcp/8.8.8.8/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
+            "timeout 10 bash -c '(echo > /dev/tcp/192.168.100.1/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
             timeout=20,
         )
         combined = (stdout + stderr).strip()
         log.info("DNS connectivity test: exit_code=%d, output: %s", rc, combined)
-        assert "DNS_REACHABLE" in stdout, "DNS server (8.8.8.8:53) should be reachable"
+        assert "DNS_REACHABLE" in stdout, "DNS proxy (192.168.100.1:53) should be reachable"
 
     def test_10_http_egress(self, server):
         """Test that HTTP egress works through the Envoy proxy."""

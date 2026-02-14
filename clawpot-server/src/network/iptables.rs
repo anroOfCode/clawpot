@@ -103,31 +103,22 @@ pub fn add_proxy_redirect_rules(bridge: &str) -> Result<()> {
     Ok(())
 }
 
-/// Add iptables rules to allow DNS through and block all other egress.
+/// Add iptables rules to redirect DNS to the proxy and block all other egress.
 /// Called once at bridge setup time.
 pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
-    // Allow DNS (UDP) forwarding
+    // Redirect DNS (UDP) to DNS proxy
     run_iptables(&[
-        "-A", "FORWARD", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT",
-    ], "ACCEPT DNS UDP forward")?;
+        "-t", "nat", "-A", "PREROUTING",
+        "-i", bridge, "-p", "udp", "--dport", "53",
+        "-j", "REDIRECT", "--to-port", "10053",
+    ], "REDIRECT DNS UDP → 10053")?;
 
-    // Allow DNS (TCP) forwarding
+    // Redirect DNS (TCP) to DNS proxy
     run_iptables(&[
-        "-A", "FORWARD", "-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT",
-    ], "ACCEPT DNS TCP forward")?;
-
-    // MASQUERADE DNS traffic so it can reach external resolvers
-    run_iptables(&[
-        "-t", "nat", "-A", "POSTROUTING",
-        "-s", "192.168.100.0/24", "-p", "udp", "--dport", "53",
-        "-j", "MASQUERADE",
-    ], "MASQUERADE DNS UDP")?;
-
-    run_iptables(&[
-        "-t", "nat", "-A", "POSTROUTING",
-        "-s", "192.168.100.0/24", "-p", "tcp", "--dport", "53",
-        "-j", "MASQUERADE",
-    ], "MASQUERADE DNS TCP")?;
+        "-t", "nat", "-A", "PREROUTING",
+        "-i", bridge, "-p", "tcp", "--dport", "53",
+        "-j", "REDIRECT", "--to-port", "10053",
+    ], "REDIRECT DNS TCP → 10053")?;
 
     // Drop all other forwarded traffic from the bridge (must be last)
     run_iptables(&[
@@ -143,10 +134,8 @@ pub fn remove_proxy_rules(bridge: &str) {
     let rules: &[&[&str]] = &[
         &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", "10080"],
         &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", "10443"],
-        &["-D", "FORWARD", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
-        &["-D", "FORWARD", "-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
-        &["-t", "nat", "-D", "POSTROUTING", "-s", "192.168.100.0/24", "-p", "udp", "--dport", "53", "-j", "MASQUERADE"],
-        &["-t", "nat", "-D", "POSTROUTING", "-s", "192.168.100.0/24", "-p", "tcp", "--dport", "53", "-j", "MASQUERADE"],
+        &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", "10053"],
+        &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", "10053"],
         &["-D", "FORWARD", "-i", bridge, "-j", "DROP"],
     ];
 
