@@ -82,6 +82,15 @@ python utils/monitor_build.py <commit-sha>
 
 Direct commits to the main branch are disabled. All changes must be submitted via pull request.
 
+The process for making changes is:
+
+1. Create a feature branch and make your changes.
+2. Run `cargo test --workspace` locally to catch unit test failures early.
+3. Commit your changes and push the branch.
+4. Open a pull request.
+5. Monitor the CI build with `python utils/monitor_build.py HEAD` and wait for it to complete. If it fails, read the logs, fix the issues, push again, and re-run the monitor. **A task is not complete until CI passes.** Do not move on or consider work done while the build is failing.
+6. If you need to make follow-up changes after the PR is open, push additional commits and run `python utils/monitor_build.py HEAD` again each time.
+
 ## Project structure
 
 - `clawpot-server/` — gRPC server that manages Firecracker microVMs
