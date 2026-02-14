@@ -106,6 +106,13 @@ pub fn add_proxy_redirect_rules(bridge: &str) -> Result<()> {
 /// Add iptables rules to allow DNS through and block all other egress.
 /// Called once at bridge setup time.
 pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
+    // Accept return traffic for established connections. This is required
+    // because the default FORWARD policy may be DROP on some distros,
+    // which would silently drop response packets for DNS and proxied traffic.
+    run_iptables(&[
+        "-A", "FORWARD", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT",
+    ], "ACCEPT ESTABLISHED/RELATED return traffic")?;
+
     // Allow DNS (UDP) forwarding
     run_iptables(&[
         "-A", "FORWARD", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT",
@@ -143,6 +150,7 @@ pub fn remove_proxy_rules(bridge: &str) {
     let rules: &[&[&str]] = &[
         &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", "10080"],
         &["-t", "nat", "-D", "PREROUTING", "-i", bridge, "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", "10443"],
+        &["-D", "FORWARD", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
         &["-D", "FORWARD", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
         &["-D", "FORWARD", "-i", bridge, "-p", "tcp", "--dport", "53", "-j", "ACCEPT"],
         &["-t", "nat", "-D", "POSTROUTING", "-s", "192.168.100.0/24", "-p", "udp", "--dport", "53", "-j", "MASQUERADE"],
