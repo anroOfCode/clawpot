@@ -78,6 +78,10 @@ To monitor a specific commit:
 python utils/monitor_build.py <commit-sha>
 ```
 
+## Workflow
+
+Direct commits to the main branch are disabled. All changes must be submitted via pull request.
+
 ## Project structure
 
 - `clawpot-server/` — gRPC server that manages Firecracker microVMs
