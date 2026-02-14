@@ -93,6 +93,15 @@ pub fn add_proxy_redirect_rules(bridge: &str) -> Result<()> {
 pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
     let ipt = ipt_new()?;
 
+    // Accept return traffic for established connections. This is required
+    // because the default FORWARD policy may be DROP on some distros,
+    // which would silently drop response packets for DNS and proxied traffic.
+    ipt_append(
+        &ipt, "filter", "FORWARD",
+        "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+        "ACCEPT ESTABLISHED/RELATED return traffic",
+    )?;
+
     // Allow DNS (UDP) forwarding
     let rule = format!("-i {} -p udp --dport 53 -j ACCEPT", bridge);
     ipt_append(&ipt, "filter", "FORWARD", &rule, "ACCEPT DNS UDP forward")?;
@@ -148,6 +157,11 @@ pub fn remove_proxy_rules(bridge: &str) {
                 "-i {} -p tcp --dport 443 -j REDIRECT --to-port 10443",
                 bridge
             ),
+        ),
+        (
+            "filter",
+            "FORWARD",
+            "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT".to_string(),
         ),
         (
             "filter",

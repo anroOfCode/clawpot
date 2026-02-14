@@ -57,11 +57,15 @@ echo "--- Running integration tests"
 
 cd tests/integration
 
-# Run pytest, capturing output to both console and log file
+# Run pytest, capturing output to both console and log file.
+# Temporarily disable set -e so we can capture the exit code
+# and still collect artifacts on failure.
+set +e
 uv run pytest -v -s --timeout=120 \
     --junitxml="$ARTIFACTS_DIR/test-results.xml" \
     2>&1 | tee "$ARTIFACTS_DIR/pytest-output.log"
 TEST_EXIT=${PIPESTATUS[0]}
+set -e
 
 cd "$WORK_DIR"
 
