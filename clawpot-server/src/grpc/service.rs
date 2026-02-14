@@ -97,7 +97,7 @@ impl ClawpotService for ClawpotServiceImpl {
         let tap_name = format!("tap-{}", uuid_short);
 
         // Create and configure TAP device
-        if let Err(e) = self.network_manager.create_tap(&tap_name, ip_address) {
+        if let Err(e) = self.network_manager.create_tap(&tap_name, ip_address).await {
             let _ = self.ip_allocator.lock().await.release(ip_address);
             error!("Failed to create TAP device: {}", e);
             return Err(Status::internal(format!(
@@ -128,7 +128,7 @@ impl ClawpotService for ClawpotServiceImpl {
         let mut manager = VmManager::new(socket_path.clone());
 
         if let Err(e) = manager.start(config).await {
-            let _ = self.network_manager.delete_tap(&tap_name, ip_address);
+            let _ = self.network_manager.delete_tap(&tap_name, ip_address).await;
             let _ = self.ip_allocator.lock().await.release(ip_address);
             error!("Failed to start VM: {}", e);
             return Err(Status::internal(format!("Failed to start VM: {}", e)));
@@ -207,6 +207,7 @@ impl ClawpotService for ClawpotServiceImpl {
         if let Err(e) = self
             .network_manager
             .delete_tap(&entry.tap_name, entry.ip_address)
+            .await
         {
             error!("Failed to delete TAP device: {}", e);
         }

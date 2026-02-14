@@ -41,11 +41,14 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("/workspaces/clawpot"));
 
     // Initialize networking
-    let network_manager = Arc::new(NetworkManager::new());
+    let network_manager = Arc::new(
+        NetworkManager::new().context("Failed to create network manager")?,
+    );
 
     info!("Ensuring network bridge exists...");
     network_manager
         .ensure_bridge()
+        .await
         .context("Failed to ensure bridge exists")?;
 
     info!("Network bridge ready ✓");
@@ -188,7 +191,7 @@ async fn shutdown_signal(
                 }
 
                 // Delete TAP device
-                if let Err(e) = network_manager.delete_tap(&tap_name, ip_address) {
+                if let Err(e) = network_manager.delete_tap(&tap_name, ip_address).await {
                     warn!("Failed to delete TAP device {}: {}", tap_name, e);
                 }
 
