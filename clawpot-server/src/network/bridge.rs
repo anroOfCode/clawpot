@@ -1,80 +1,67 @@
 use anyhow::{Context, Result};
+use futures_util::stream::TryStreamExt;
+use rtnetlink::{Handle, LinkBridge, LinkUnspec};
 use std::net::IpAddr;
-use std::process::Command;
 use tracing::info;
 
 /// Ensure a bridge device exists, create if missing
 /// Assigns the gateway IP and brings it up
-pub fn ensure_bridge(name: &str, gateway_ip: IpAddr) -> Result<()> {
+pub async fn ensure_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Result<()> {
     // Check if bridge already exists
-    let output = Command::new("ip")
-        .args(["link", "show", name])
-        .output()
-        .context("Failed to check if bridge exists")?;
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(name.to_string())
+        .execute();
 
-    if !output.status.success() {
+    if links.try_next().await.is_ok() {
+        info!("Bridge {} already exists", name);
+    } else {
         // Bridge doesn't exist, create it
         info!("Bridge {} does not exist, creating...", name);
-        create_bridge(name, gateway_ip)?;
-    } else {
-        info!("Bridge {} already exists", name);
+        create_bridge(handle, name, gateway_ip).await?;
     }
 
     Ok(())
 }
 
 /// Create a new bridge device
-fn create_bridge(name: &str, gateway_ip: IpAddr) -> Result<()> {
+async fn create_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Result<()> {
     // Create bridge
-    let output = Command::new("ip")
-        .args(["link", "add", name, "type", "bridge"])
-        .output()
-        .context("Failed to create bridge")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "Failed to create bridge {}: {}",
-            name,
-            stderr
-        ));
-    }
+    handle
+        .link()
+        .add(LinkBridge::new(name).build())
+        .execute()
+        .await
+        .context(format!("Failed to create bridge {}", name))?;
 
     info!("Created bridge: {}", name);
 
+    // Get bridge index for subsequent operations
+    let index = get_link_index(handle, name)
+        .await
+        .context(format!("Failed to get index for bridge {}", name))?;
+
     // Assign IP to bridge
-    let ip_with_mask = format!("{}/24", gateway_ip);
-    let output = Command::new("ip")
-        .args(["addr", "add", &ip_with_mask, "dev", name])
-        .output()
-        .context("Failed to assign IP to bridge")?;
+    handle
+        .address()
+        .add(index, gateway_ip, 24)
+        .execute()
+        .await
+        .context(format!(
+            "Failed to assign IP {}/24 to bridge {}",
+            gateway_ip, name
+        ))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "Failed to assign IP {} to bridge {}: {}",
-            ip_with_mask,
-            name,
-            stderr
-        ));
-    }
-
-    info!("Assigned IP {} to bridge {}", ip_with_mask, name);
+    info!("Assigned IP {}/24 to bridge {}", gateway_ip, name);
 
     // Bring bridge up
-    let output = Command::new("ip")
-        .args(["link", "set", name, "up"])
-        .output()
-        .context("Failed to bring up bridge")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "Failed to bring up bridge {}: {}",
-            name,
-            stderr
-        ));
-    }
+    handle
+        .link()
+        .set(LinkUnspec::new_with_index(index).up().build())
+        .execute()
+        .await
+        .context(format!("Failed to bring up bridge {}", name))?;
 
     info!("Brought up bridge: {}", name);
 
@@ -116,24 +103,48 @@ fn enable_ip_forwarding() -> Result<()> {
 }
 
 /// Attach a TAP device to a bridge
-pub fn attach_tap_to_bridge(bridge: &str, tap: &str) -> Result<()> {
-    let output = Command::new("ip")
-        .args(["link", "set", tap, "master", bridge])
-        .output()
-        .context("Failed to attach TAP to bridge")?;
+pub async fn attach_tap_to_bridge(handle: &Handle, bridge: &str, tap: &str) -> Result<()> {
+    let bridge_index = get_link_index(handle, bridge)
+        .await
+        .context(format!("Failed to get index for bridge {}", bridge))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow::anyhow!(
-            "Failed to attach TAP {} to bridge {}: {}",
-            tap,
-            bridge,
-            stderr
-        ));
-    }
+    let tap_index = get_link_index(handle, tap)
+        .await
+        .context(format!("Failed to get index for TAP {}", tap))?;
+
+    handle
+        .link()
+        .set(
+            LinkUnspec::new_with_index(tap_index)
+                .controller(bridge_index)
+                .build(),
+        )
+        .execute()
+        .await
+        .context(format!(
+            "Failed to attach TAP {} to bridge {}",
+            tap, bridge
+        ))?;
 
     info!("Attached TAP device {} to bridge {}", tap, bridge);
     Ok(())
+}
+
+/// Get the interface index for a named link
+pub async fn get_link_index(handle: &Handle, name: &str) -> Result<u32> {
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(name.to_string())
+        .execute();
+
+    let link = links
+        .try_next()
+        .await
+        .context(format!("Failed to query link {}", name))?
+        .ok_or_else(|| anyhow::anyhow!("Link {} not found", name))?;
+
+    Ok(link.header.index)
 }
 
 #[cfg(test)]
@@ -141,16 +152,20 @@ mod tests {
     use super::*;
     use std::net::Ipv4Addr;
 
-    #[test]
+    #[tokio::test]
     #[ignore] // Requires root privileges
-    fn test_ensure_bridge() {
+    async fn test_ensure_bridge() {
+        let (connection, handle, _) = rtnetlink::new_connection().unwrap();
+        tokio::spawn(connection);
+
         let gateway = IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1));
-        ensure_bridge("test-br0", gateway).expect("Failed to ensure bridge");
+        ensure_bridge(&handle, "test-br0", gateway)
+            .await
+            .expect("Failed to ensure bridge");
 
         // Cleanup
-        Command::new("ip")
-            .args(["link", "del", "test-br0"])
-            .output()
-            .ok();
+        if let Ok(index) = get_link_index(&handle, "test-br0").await {
+            let _ = handle.link().del(index).execute().await;
+        }
     }
 }
