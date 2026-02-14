@@ -1,6 +1,7 @@
 mod agent;
 mod grpc;
 mod network;
+mod proxy;
 mod telemetry;
 mod vm;
 
@@ -8,6 +9,8 @@ use anyhow::{Context, Result};
 use clawpot_common::proto::clawpot_service_server::ClawpotServiceServer;
 use grpc::ClawpotServiceImpl;
 use network::{ip_allocator::IpAllocator, NetworkManager};
+use proxy::ca::CertificateAuthority;
+use proxy::envoy::EnvoyManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
@@ -32,6 +35,11 @@ async fn main() -> Result<()> {
 
     info!("Running as root ✓");
 
+    // Server configuration - resolve paths relative to the binary or use env override
+    let project_root = std::env::var("CLAWPOT_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/workspaces/clawpot"));
+
     // Initialize networking
     let network_manager = Arc::new(NetworkManager::new());
 
@@ -42,6 +50,30 @@ async fn main() -> Result<()> {
 
     info!("Network bridge ready ✓");
 
+    // Initialize CA and proxy infrastructure
+    let ca_dir = project_root.join("ca");
+    let ca = Arc::new(
+        CertificateAuthority::new(&ca_dir).context("Failed to initialize CA")?,
+    );
+    info!("Certificate authority ready ✓");
+
+    // Start TLS MITM proxy
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    let mitm_ca = ca.clone();
+    let _mitm_handle = tokio::spawn(async move {
+        proxy::tls_mitm::run(mitm_ca, cancel_rx).await;
+    });
+    info!("TLS MITM proxy started ✓");
+
+    // Start Envoy proxy
+    let envoy_config_dir = project_root.join("envoy");
+    let envoy_manager = Arc::new(Mutex::new(
+        EnvoyManager::start(&envoy_config_dir)
+            .await
+            .context("Failed to start Envoy proxy")?,
+    ));
+    info!("Envoy proxy started ✓");
+
     // Initialize IP allocator
     let ip_allocator = Arc::new(Mutex::new(IpAllocator::new()));
     info!("IP allocator initialized (192.168.100.2-254) ✓");
@@ -50,10 +82,6 @@ async fn main() -> Result<()> {
     let vm_registry = Arc::new(VmRegistry::new());
     info!("VM registry initialized ✓");
 
-    // Server configuration - resolve paths relative to the binary or use env override
-    let project_root = std::env::var("CLAWPOT_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/workspaces/clawpot"));
     let kernel_path = project_root.join("assets/kernels/vmlinux");
     let rootfs_path = project_root.join("assets/rootfs/ubuntu.ext4");
 
@@ -90,7 +118,16 @@ async fn main() -> Result<()> {
     // Start gRPC server with graceful shutdown
     Server::builder()
         .add_service(ClawpotServiceServer::new(service))
-        .serve_with_shutdown(addr, shutdown_signal(vm_registry, network_manager, ip_allocator))
+        .serve_with_shutdown(
+            addr,
+            shutdown_signal(
+                vm_registry,
+                network_manager,
+                ip_allocator,
+                envoy_manager,
+                cancel_tx,
+            ),
+        )
         .await
         .context("gRPC server failed")?;
 
@@ -110,6 +147,8 @@ async fn shutdown_signal(
     registry: Arc<VmRegistry>,
     network_manager: Arc<NetworkManager>,
     ip_allocator: Arc<Mutex<IpAllocator>>,
+    envoy_manager: Arc<Mutex<EnvoyManager>>,
+    mitm_cancel: tokio::sync::watch::Sender<bool>,
 ) {
     // Wait for SIGINT (Ctrl+C) or SIGTERM
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
@@ -165,6 +204,12 @@ async fn shutdown_signal(
             }
         }
     }
+
+    // Stop proxy infrastructure
+    info!("Stopping proxy infrastructure...");
+    let _ = mitm_cancel.send(true);
+    envoy_manager.lock().await.stop().await;
+    network::iptables::remove_proxy_rules(network_manager.bridge_name());
 
     info!("All VMs cleaned up. Server shutting down.");
 }

@@ -81,6 +81,13 @@ runcmd:
   # Install uv (system-wide so it works under sudo too)
   - curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 
+  # Install Envoy proxy
+  - |
+    curl -fsSL https://func-e.io/install.sh | bash -s -- -b /usr/local/bin
+    func-e use 1.31.2
+    cp "\$(func-e which)" /usr/local/bin/envoy
+    chmod +x /usr/local/bin/envoy
+
   # Install Firecracker
   - |
     curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${ARCH}.tgz" -o /tmp/firecracker.tgz

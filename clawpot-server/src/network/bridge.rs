@@ -81,6 +81,10 @@ fn create_bridge(name: &str, gateway_ip: IpAddr) -> Result<()> {
     // Enable IP forwarding
     enable_ip_forwarding()?;
 
+    // Set up proxy redirect and egress filter rules
+    super::iptables::add_proxy_redirect_rules(name)?;
+    super::iptables::add_egress_filter_rules(name)?;
+
     Ok(())
 }
 
