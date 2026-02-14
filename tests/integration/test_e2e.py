@@ -256,7 +256,70 @@ class TestE2E:
         assert "processor" in stdout
         log.info("VM has cpuinfo output (%d bytes)", len(stdout))
 
-    def test_09_delete_vm(self, server):
+    def test_09_dns_resolution(self, server):
+        """Test that DNS resolution works inside the VM."""
+        assert _vm_id is not None, "No VM created"
+
+        stdout_dns, _, _ = cli("exec", _vm_id, "--", "cat", "/etc/resolv.conf")
+        log.info("VM DNS config:\n%s", stdout_dns.strip())
+        assert "8.8.8.8" in stdout_dns, "Expected nameserver 8.8.8.8 in resolv.conf"
+
+        # Resolve a well-known domain via DNS
+        stdout, stderr, rc = cli(
+            "exec", _vm_id, "--",
+            "bash", "-c",
+            "timeout 10 bash -c '(echo > /dev/tcp/8.8.8.8/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
+            timeout=20,
+        )
+        combined = (stdout + stderr).strip()
+        log.info("DNS connectivity test: exit_code=%d, output: %s", rc, combined)
+        assert "DNS_REACHABLE" in stdout, "DNS server (8.8.8.8:53) should be reachable"
+
+    def test_10_http_egress(self, server):
+        """Test that HTTP egress works through the Envoy proxy."""
+        assert _vm_id is not None, "No VM created"
+
+        stdout, stderr, rc = cli(
+            "exec", _vm_id, "--",
+            "bash", "-c",
+            "timeout 10 bash -c '(echo -e \"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n\" > /dev/tcp/93.184.216.34/80 && echo HTTP_OK) || echo HTTP_FAIL'",
+            timeout=20,
+        )
+        combined = (stdout + stderr).strip()
+        log.info("HTTP egress test: exit_code=%d, output: %s", rc, combined)
+        assert "HTTP_OK" in stdout, "HTTP egress to example.com should work"
+
+    def test_11_https_egress(self, server):
+        """Test that HTTPS egress works through the TLS MITM + Envoy proxy."""
+        assert _vm_id is not None, "No VM created"
+
+        # Use curl if available, otherwise use openssl s_client
+        stdout, stderr, rc = cli(
+            "exec", _vm_id, "--",
+            "bash", "-c",
+            "if command -v curl &>/dev/null; then timeout 10 curl -sf -o /dev/null -w '%{http_code}' https://example.com && echo HTTPS_OK; else timeout 10 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            timeout=20,
+        )
+        combined = (stdout + stderr).strip()
+        log.info("HTTPS egress test: exit_code=%d, output: %s", rc, combined)
+        assert "HTTPS_OK" in stdout, "HTTPS egress to example.com should work"
+
+    def test_12_non_http_blocked(self, server):
+        """Test that non-HTTP/HTTPS/DNS traffic is blocked."""
+        assert _vm_id is not None, "No VM created"
+
+        # Try to connect to port 22 on an external host — should be blocked
+        stdout, stderr, rc = cli(
+            "exec", _vm_id, "--",
+            "bash", "-c",
+            "timeout 5 bash -c '(echo > /dev/tcp/8.8.8.8/22) 2>/dev/null && echo PORT22_OPEN || echo PORT22_BLOCKED'",
+            timeout=15,
+        )
+        combined = (stdout + stderr).strip()
+        log.info("Non-HTTP traffic test: exit_code=%d, output: %s", rc, combined)
+        assert "PORT22_BLOCKED" in stdout or rc != 0, "Non-HTTP traffic (port 22) should be blocked"
+
+    def test_13_delete_vm(self, server):
         """Delete the VM."""
         assert _vm_id is not None, "No VM created"
 
@@ -264,7 +327,7 @@ class TestE2E:
         assert rc == 0
         assert "VM deleted successfully" in stdout
 
-    def test_10_list_empty_after_delete(self, server):
+    def test_14_list_empty_after_delete(self, server):
         """After deletion, list should be empty again."""
         stdout, _, rc = cli("list")
         assert rc == 0

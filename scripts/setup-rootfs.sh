@@ -13,6 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 ROOTFS_PATH="$PROJECT_ROOT/assets/rootfs/ubuntu.ext4"
 AGENT_BINARY="$PROJECT_ROOT/target/x86_64-unknown-linux-musl/release/clawpot-agent"
+CA_CERT="$PROJECT_ROOT/ca/ca.crt"
 MOUNT_POINT="/tmp/clawpot-rootfs-mount"
 
 # Verify prerequisites
@@ -86,6 +87,23 @@ info "Enabling service..."
 mkdir -p "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/clawpot-agent.service \
     "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants/clawpot-agent.service"
+
+# Inject CA certificate for TLS MITM proxy trust
+if [ -f "$CA_CERT" ]; then
+    info "Injecting CA certificate for MITM proxy..."
+    mkdir -p "$MOUNT_POINT/usr/local/share/ca-certificates"
+    cp "$CA_CERT" "$MOUNT_POINT/usr/local/share/ca-certificates/clawpot-ca.crt"
+    chroot "$MOUNT_POINT" update-ca-certificates
+    info "CA certificate injected into trust store"
+else
+    info "No CA certificate found at $CA_CERT, skipping trust store injection"
+fi
+
+# Set DNS resolver
+info "Configuring DNS resolver..."
+cat > "$MOUNT_POINT/etc/resolv.conf" << 'DNS'
+nameserver 8.8.8.8
+DNS
 
 info "Rootfs updated successfully with clawpot-agent!"
 info "Agent binary size: $(du -h "$AGENT_BINARY" | cut -f1)"
