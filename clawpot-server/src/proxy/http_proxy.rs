@@ -298,9 +298,22 @@ async fn handle_request_inner(
     }
 
     // 5b. Detect LLM API request
+    info!(
+        host = %host,
+        path = %path,
+        tls = ctx.use_tls_upstream,
+        "LLM detection: checking request"
+    );
     let llm_detection = llm::detect_llm_request(&host, &path, &headers_map, &ctx.llm_keys);
 
     if let Some(ref det) = llm_detection {
+        info!(
+            provider = %det.provider,
+            endpoint = %det.endpoint,
+            has_inject = det.inject_header.is_some(),
+            has_strip = det.strip_header.is_some(),
+            "LLM request detected"
+        );
         let req_body_json: serde_json::Value =
             serde_json::from_slice(&req_body).unwrap_or(serde_json::Value::Null);
         let (model, message_count, streaming) =
