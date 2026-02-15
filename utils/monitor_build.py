@@ -59,11 +59,39 @@ def api_get(token: str, path: str) -> dict | list | str:
 
 
 def api_download(token: str, url: str, dest: Path):
-    """Download a file from a URL, following redirects."""
+    """Download a file from a Buildkite artifact URL.
+
+    Buildkite's download_url returns a 302 redirect to a presigned storage URL.
+    We must NOT forward the Authorization header to the storage backend (it
+    rejects it with 400), so we manually follow the redirect.
+    """
+    import urllib.request
+
+    class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None  # Don't follow redirects automatically
+
+    opener = urllib.request.build_opener(NoRedirectHandler)
     req = Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
-        with urlopen(req) as resp:
-            dest.parent.mkdir(parents=True, exist_ok=True)
+        opener.open(req)
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            # Follow the redirect without the auth header
+            redirect_url = e.headers.get("Location")
+            if redirect_url:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with urlopen(redirect_url) as resp:
+                    dest.write_bytes(resp.read())
+                return
+        print(f"  Download failed ({e.code}): {dest.name}", file=sys.stderr)
+        return
+
+    # If no redirect (shouldn't happen), try direct download
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req2 = Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urlopen(req2) as resp:
             dest.write_bytes(resp.read())
     except HTTPError as e:
         print(f"  Download failed ({e.code}): {dest.name}", file=sys.stderr)

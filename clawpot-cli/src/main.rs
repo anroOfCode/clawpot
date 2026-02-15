@@ -52,10 +52,6 @@ enum Commands {
 
     /// Query event logs from the events database
     Logs {
-        /// Path to the events database
-        #[arg(long)]
-        db: Option<String>,
-
         #[command(subcommand)]
         action: LogsAction,
     },
@@ -64,10 +60,18 @@ enum Commands {
 #[derive(Subcommand)]
 enum LogsAction {
     /// List all server sessions
-    Sessions,
+    Sessions {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+    },
 
     /// Show events (filtered)
     Show {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
         /// Filter by session ID
         #[arg(long)]
         session: Option<String>,
@@ -91,6 +95,10 @@ enum LogsAction {
 
     /// Export events as JSONL or JSON
     Export {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
         /// Filter by session ID
         #[arg(long)]
         session: Option<String>,
@@ -102,6 +110,10 @@ enum LogsAction {
 
     /// Show a human-readable chronological timeline
     Timeline {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
         /// Filter by session ID
         #[arg(long)]
         session: Option<String>,
@@ -117,10 +129,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Handle logs command without gRPC connection
-    if let Commands::Logs { db, action } = &cli.command {
+    if let Commands::Logs { action } = &cli.command {
         return match action {
-            LogsAction::Sessions => commands::logs::execute_sessions(db.as_deref()),
+            LogsAction::Sessions { db } => commands::logs::execute_sessions(db.as_deref()),
             LogsAction::Show {
+                db,
                 session,
                 vm,
                 category,
@@ -134,10 +147,12 @@ async fn main() -> Result<()> {
                 event_type.as_deref(),
                 *limit,
             ),
-            LogsAction::Export { session, format } => {
-                commands::logs::execute_export(db.as_deref(), session.as_deref(), format)
-            }
-            LogsAction::Timeline { session, vm } => {
+            LogsAction::Export {
+                db,
+                session,
+                format,
+            } => commands::logs::execute_export(db.as_deref(), session.as_deref(), format),
+            LogsAction::Timeline { db, session, vm } => {
                 commands::logs::execute_timeline(db.as_deref(), session.as_deref(), vm.as_deref())
             }
         };
