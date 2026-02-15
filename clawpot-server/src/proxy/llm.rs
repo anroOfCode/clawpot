@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::env;
-use tracing::{debug, info};
+use tracing::info;
 
 /// An LLM API provider (e.g. Anthropic, OpenAI).
 struct LlmProvider {
@@ -63,11 +63,10 @@ impl LlmKeyStore {
                 let key = raw_key.trim().to_string();
                 if !key.is_empty() {
                     info!(
-                        "Loaded API key for {} from {} ({} chars, prefix={:.10}...)",
+                        "Loaded API key for {} from {} ({} chars)",
                         provider.name,
                         provider.env_var,
-                        key.len(),
-                        key
+                        key.len()
                     );
                     keys.insert(provider.name.to_string(), key);
                 }
@@ -104,23 +103,10 @@ pub fn detect_llm_request(
     // Strip port from host for matching (e.g. "api.anthropic.com:443" -> "api.anthropic.com")
     let host_bare = host.split(':').next().unwrap_or(host);
 
-    debug!(
-        host = host,
-        host_bare = host_bare,
-        path = path,
-        "LLM detection check"
-    );
-
     for provider in PROVIDERS {
         if !host_bare.eq_ignore_ascii_case(provider.host) {
             continue;
         }
-
-        debug!(
-            provider = provider.name,
-            has_key = key_store.get(provider.name).is_some(),
-            "LLM provider matched"
-        );
 
         // Host matches — find the specific endpoint
         let endpoint_name = provider
