@@ -38,16 +38,36 @@ pub async fn run(
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
-) {
-    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+    ready: tokio::sync::oneshot::Sender<()>,
+) -> Result<()> {
+    let https_connector = match hyper_rustls::HttpsConnectorBuilder::new()
         .with_native_roots()
-        .context("Failed to load native TLS roots")
-        .unwrap()
-        .https_or_http()
-        .enable_http1()
-        .build();
+    {
+        Ok(builder) => builder,
+        Err(e) => {
+            warn!("Failed to load native TLS roots ({}), falling back to webpki roots", e);
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+        }
+    }
+    .https_or_http()
+    .enable_http1()
+    .build();
 
     let http_client = Client::builder(TokioExecutor::new()).build(https_connector);
+
+    // Pre-bind both listeners before spawning tasks
+    let http_listener = TcpListener::bind(HTTP_LISTEN_ADDR)
+        .await
+        .with_context(|| format!("Failed to bind HTTP proxy on {}", HTTP_LISTEN_ADDR))?;
+    let https_listener = TcpListener::bind(HTTPS_LISTEN_ADDR)
+        .await
+        .with_context(|| format!("Failed to bind HTTP proxy on {}", HTTPS_LISTEN_ADDR))?;
+
+    info!("HTTP proxy listening on {} and {}", HTTP_LISTEN_ADDR, HTTPS_LISTEN_ADDR);
+
+    // Signal readiness now that both sockets are bound
+    let _ = ready.send(());
 
     let http_ctx = Arc::new(ProxyCtx {
         registry: registry.clone(),
@@ -70,32 +90,27 @@ pub async fn run(
     let mut cancel2 = cancel.clone();
 
     let http_task = tokio::spawn(async move {
-        if let Err(e) = run_listener(HTTP_LISTEN_ADDR, http_ctx, &mut cancel).await {
+        if let Err(e) = run_listener(http_listener, http_ctx, &mut cancel).await {
             error!("HTTP proxy listener failed: {:#}", e);
         }
     });
 
     let https_task = tokio::spawn(async move {
-        if let Err(e) = run_listener(HTTPS_LISTEN_ADDR, https_ctx, &mut cancel2).await {
+        if let Err(e) = run_listener(https_listener, https_ctx, &mut cancel2).await {
             error!("HTTPS proxy listener failed: {:#}", e);
         }
     });
 
     let _ = tokio::join!(http_task, https_task);
     info!("HTTP proxy shut down");
+    Ok(())
 }
 
 async fn run_listener(
-    addr: &str,
+    listener: TcpListener,
     ctx: Arc<ProxyCtx>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("Failed to bind HTTP proxy on {}", addr))?;
-
-    info!("HTTP proxy listening on {} (tls_upstream={})", addr, ctx.use_tls_upstream);
-
     loop {
         tokio::select! {
             result = listener.accept() => {
@@ -119,7 +134,7 @@ async fn run_listener(
                 });
             }
             _ = cancel.changed() => {
-                info!("HTTP proxy listener on {} received shutdown signal", addr);
+                info!("HTTP proxy listener received shutdown signal");
                 break;
             }
         }

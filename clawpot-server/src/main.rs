@@ -83,20 +83,24 @@ async fn main() -> Result<()> {
     // Create shared cancellation channel
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
-    // Start TLS MITM proxy
-    let mitm_ca = ca.clone();
-    let mitm_cancel = cancel_rx.clone();
-    let _mitm_handle = tokio::spawn(async move {
-        proxy::tls_mitm::run(mitm_ca, mitm_cancel).await;
-    });
-    info!("TLS MITM proxy started ✓");
-
-    // Initialize IP allocator and VM registry (before HTTP proxy so registry is available)
+    // Initialize IP allocator and VM registry (before proxies so registry is available)
     let ip_allocator = Arc::new(Mutex::new(IpAllocator::new()));
     info!("IP allocator initialized (192.168.100.2-254) ✓");
 
     let vm_registry = Arc::new(VmRegistry::new());
     info!("VM registry initialized ✓");
+
+    // Create oneshot channels for proxy startup verification
+    let (mitm_ready_tx, mitm_ready_rx) = tokio::sync::oneshot::channel();
+    let (http_ready_tx, http_ready_rx) = tokio::sync::oneshot::channel();
+    let (dns_ready_tx, dns_ready_rx) = tokio::sync::oneshot::channel();
+
+    // Start TLS MITM proxy
+    let mitm_ca = ca.clone();
+    let mitm_cancel = cancel_rx.clone();
+    let _mitm_handle = tokio::spawn(async move {
+        proxy::tls_mitm::run(mitm_ca, mitm_cancel, mitm_ready_tx).await;
+    });
 
     // Start HTTP proxy
     let http_registry = vm_registry.clone();
@@ -105,9 +109,10 @@ async fn main() -> Result<()> {
     let http_auth = auth.clone();
     let http_cancel = cancel_rx.clone();
     let _http_handle = tokio::spawn(async move {
-        proxy::http_proxy::run(http_registry, http_db, http_body_store, http_auth, http_cancel).await;
+        if let Err(e) = proxy::http_proxy::run(http_registry, http_db, http_body_store, http_auth, http_cancel, http_ready_tx).await {
+            error!("HTTP proxy failed: {:#}", e);
+        }
     });
-    info!("HTTP proxy started ✓");
 
     // Start DNS proxy
     let dns_registry = vm_registry.clone();
@@ -115,8 +120,17 @@ async fn main() -> Result<()> {
     let dns_auth = auth.clone();
     let dns_cancel = cancel_rx.clone();
     let _dns_handle = tokio::spawn(async move {
-        proxy::dns_proxy::run(dns_registry, dns_db, dns_auth, dns_cancel).await;
+        proxy::dns_proxy::run(dns_registry, dns_db, dns_auth, dns_cancel, dns_ready_tx).await;
     });
+
+    // Wait for all proxies to be ready before starting gRPC
+    mitm_ready_rx.await.context("TLS MITM proxy failed to start")?;
+    info!("TLS MITM proxy started ✓");
+
+    http_ready_rx.await.context("HTTP proxy failed to start")?;
+    info!("HTTP proxy started ✓");
+
+    dns_ready_rx.await.context("DNS proxy failed to start")?;
     info!("DNS proxy started ✓");
 
     let kernel_path = project_root.join("assets/kernels/vmlinux");

@@ -13,8 +13,12 @@ const MITM_LISTEN_ADDR: &str = "0.0.0.0:10443";
 const HTTP_PROXY_TLS_ADDR: &str = "127.0.0.1:10081";
 
 /// Start the TLS MITM proxy. Runs until the cancellation token is triggered.
-pub async fn run(ca: Arc<CertificateAuthority>, cancel: tokio::sync::watch::Receiver<bool>) {
-    match run_inner(ca, cancel).await {
+pub async fn run(
+    ca: Arc<CertificateAuthority>,
+    cancel: tokio::sync::watch::Receiver<bool>,
+    ready: tokio::sync::oneshot::Sender<()>,
+) {
+    match run_inner(ca, cancel, ready).await {
         Ok(()) => info!("TLS MITM proxy shut down"),
         Err(e) => error!("TLS MITM proxy failed: {:#}", e),
     }
@@ -23,12 +27,16 @@ pub async fn run(ca: Arc<CertificateAuthority>, cancel: tokio::sync::watch::Rece
 async fn run_inner(
     ca: Arc<CertificateAuthority>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
+    ready: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()> {
     let listener = TcpListener::bind(MITM_LISTEN_ADDR)
         .await
         .with_context(|| format!("Failed to bind TLS MITM proxy on {}", MITM_LISTEN_ADDR))?;
 
     info!("TLS MITM proxy listening on {}", MITM_LISTEN_ADDR);
+
+    // Signal readiness now that the socket is bound
+    let _ = ready.send(());
 
     loop {
         tokio::select! {
