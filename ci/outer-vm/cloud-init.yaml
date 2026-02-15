@@ -64,15 +64,29 @@ runcmd:
   # --- Python / uv (as buildkite-agent) ---
   - su - buildkite-agent -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
 
-  # --- Configure Buildkite agent ---
+  # --- Configure Buildkite agents (two queues) ---
   - |
-    cat > /etc/buildkite-agent/buildkite-agent.cfg << 'AGENTCFG'
+    # Build queue config (4 agents via spawn)
+    cat > /etc/buildkite-agent/buildkite-agent-build.cfg << 'AGENTCFG'
     token="REPLACE_WITH_AGENT_TOKEN"
-    name="clawpot-ci-%hostname-%n"
-    tags="queue=clawpot,os=linux,kvm=true"
+    name="clawpot-ci-%hostname-build-%spawn"
+    tags="queue=build,os=linux"
     build-path="/var/lib/buildkite-agent/builds"
     hooks-path="/etc/buildkite-agent/hooks"
     plugins-path="/etc/buildkite-agent/plugins"
+    spawn=4
+    AGENTCFG
+
+  - |
+    # Integration queue config (1 agent)
+    cat > /etc/buildkite-agent/buildkite-agent-integration.cfg << 'AGENTCFG'
+    token="REPLACE_WITH_AGENT_TOKEN"
+    name="clawpot-ci-%hostname-integration-%spawn"
+    tags="queue=integration,os=linux,kvm=true"
+    build-path="/var/lib/buildkite-agent/builds"
+    hooks-path="/etc/buildkite-agent/hooks"
+    plugins-path="/etc/buildkite-agent/plugins"
+    spawn=1
     AGENTCFG
 
   # --- Environment hook so agent finds cargo/uv ---
@@ -105,5 +119,38 @@ runcmd:
     fi
     chown -R buildkite-agent:buildkite-agent "$CI_SSH_DIR"
 
-  # --- Enable and start Buildkite agent ---
-  - systemctl enable --now buildkite-agent
+  # --- Systemd services for each queue ---
+  - |
+    cat > /etc/systemd/system/buildkite-agent-build.service << 'UNIT'
+    [Unit]
+    Description=Buildkite Agent (build queue)
+    After=network.target
+    [Service]
+    Type=simple
+    User=buildkite-agent
+    ExecStart=/usr/bin/buildkite-agent start --config /etc/buildkite-agent/buildkite-agent-build.cfg
+    Restart=always
+    RestartSec=5
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+
+  - |
+    cat > /etc/systemd/system/buildkite-agent-integration.service << 'UNIT'
+    [Unit]
+    Description=Buildkite Agent (integration queue)
+    After=network.target
+    [Service]
+    Type=simple
+    User=buildkite-agent
+    ExecStart=/usr/bin/buildkite-agent start --config /etc/buildkite-agent/buildkite-agent-integration.cfg
+    Restart=always
+    RestartSec=5
+    [Install]
+    WantedBy=multi-user.target
+    UNIT
+
+  - systemctl daemon-reload
+  - systemctl disable buildkite-agent
+  - systemctl enable --now buildkite-agent-build
+  - systemctl enable --now buildkite-agent-integration

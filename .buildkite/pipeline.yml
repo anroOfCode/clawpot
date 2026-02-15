@@ -1,16 +1,20 @@
 agents:
-  queue: "clawpot"
+  queue: "build"
 
 steps:
   - label: ":lint-roller: Lint"
     key: "lint"
     command: .buildkite/scripts/lint.sh
     timeout_in_minutes: 10
+    agents:
+      queue: "build"
 
   - label: ":rust: Build & Unit Tests"
     key: "build"
     command: .buildkite/scripts/build.sh
     timeout_in_minutes: 15
+    agents:
+      queue: "build"
 
   - label: ":fire: Integration Tests"
     key: "integration"
@@ -19,5 +23,7 @@ steps:
     timeout_in_minutes: 20
     secrets:
       - CLAWPOT_ANTHROPIC_API_KEY
+    agents:
+      queue: "integration"
     artifact_paths:
       - "artifacts/*"
