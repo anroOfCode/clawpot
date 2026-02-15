@@ -112,6 +112,10 @@ async fn main() -> Result<()> {
     );
     clawpot_log!(event_store, "server", "Authorization client ready");
 
+    // Initialize LLM key store
+    let llm_keys = Arc::new(proxy::llm::LlmKeyStore::from_env());
+    clawpot_log!(event_store, "server", "LLM key store initialized");
+
     // Create shared cancellation channel
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
@@ -143,6 +147,7 @@ async fn main() -> Result<()> {
     let http_events = event_store.clone();
     let http_body_store = body_store.clone();
     let http_auth = auth.clone();
+    let http_llm_keys = llm_keys.clone();
     let http_cancel = cancel_rx.clone();
     let _http_handle = tokio::spawn(async move {
         if let Err(e) = proxy::http_proxy::run(
@@ -150,6 +155,7 @@ async fn main() -> Result<()> {
             http_events,
             http_body_store,
             http_auth,
+            http_llm_keys,
             http_cancel,
             http_ready_tx,
         )

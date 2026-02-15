@@ -101,12 +101,34 @@ echo "--- :arrow_up: Upload build tarball to inner VM"
 $SCP_CMD "$TARBALL" "${INNER_VM_SSH_USER}@${INNER_VM_SSH_HOST}:/work/build.tar.gz"
 echo "Tarball uploaded"
 
+# --- Forward API key secrets to inner VM ---
+# The pipeline.yml `secrets:` block exposes secrets as env vars.
+# We write them to a file, SCP it to the inner VM, and source it there.
+# Use `declare -p` for reliable serialization of values with special chars.
+_secrets_file=$(mktemp)
+for _var in CLAWPOT_ANTHROPIC_API_KEY CLAWPOT_OPENAI_API_KEY; do
+    if [ -n "${!_var:-}" ]; then
+        declare -p "$_var" >> "$_secrets_file"
+    fi
+done
+if [ -s "$_secrets_file" ]; then
+    $SCP_CMD "$_secrets_file" "${INNER_VM_SSH_USER}@${INNER_VM_SSH_HOST}:/work/.secrets"
+    $SSH_CMD "chmod 600 /work/.secrets"
+    echo "Forwarded API key secrets to inner VM"
+else
+    echo "No API key secrets to forward"
+fi
+rm -f "$_secrets_file"
+
 # --- Run tests inside inner VM ---
 echo "--- :microscope: Run integration tests"
 
-# Unpack and run install_and_test.sh as root inside the inner VM
+# Unpack and run install_and_test.sh as root inside the inner VM.
+# Disable set -e so test failures don't skip artifact collection.
+set +e
 $SSH_CMD "cd /work && tar xzf build.tar.gz && sudo bash /work/clawpot/install_and_test.sh"
 TEST_EXIT=$?
+set -e
 
 # --- Collect artifacts ---
 echo "--- :floppy_disk: Collect artifacts"

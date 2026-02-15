@@ -115,11 +115,16 @@ async fn process_dns_query(
     let start = Instant::now();
     let corr_id = Uuid::new_v4().to_string();
 
-    // 1. Resolve vm_id
-    let vm_id = registry
-        .find_by_ip(peer_addr.ip())
-        .await
-        .map_or_else(|| "unknown".to_string(), |id| id.to_string());
+    // 1. Resolve vm_id — block unknown sources
+    let vm_id = if let Some(id) = registry.find_by_ip(peer_addr.ip()).await {
+        id.to_string()
+    } else {
+        warn!(
+            "Blocking DNS request from unknown source IP: {}",
+            peer_addr.ip()
+        );
+        return Ok(build_refused_response(packet));
+    };
 
     // 2. Parse DNS query
     let (query_name, query_type) =

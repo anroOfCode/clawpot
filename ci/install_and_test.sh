@@ -23,6 +23,13 @@ mkdir -p "$ARTIFACTS_DIR"
 cd "$WORK_DIR"
 export CLAWPOT_ROOT="$WORK_DIR"
 
+# Source API key secrets if forwarded from the outer VM
+if [ -f /work/.secrets ]; then
+    # shellcheck disable=SC1091
+    source /work/.secrets
+    rm -f /work/.secrets
+fi
+
 echo "=== Clawpot Integration Test Runner ==="
 echo "Working directory: $WORK_DIR"
 echo "Artifacts directory: $ARTIFACTS_DIR"
@@ -73,11 +80,14 @@ echo "--- Running integration tests"
 
 cd tests/integration
 
-# Run pytest, capturing output to both console and log file
+# Run pytest, capturing output to both console and log file.
+# Disable set -e so that test failures don't skip artifact collection.
+set +eo pipefail
 uv run pytest -v -s --timeout=120 \
     --junitxml="$ARTIFACTS_DIR/test-results.xml" \
     2>&1 | tee "$ARTIFACTS_DIR/pytest-output.log"
 TEST_EXIT=${PIPESTATUS[0]}
+set -eo pipefail
 
 cd "$WORK_DIR"
 
