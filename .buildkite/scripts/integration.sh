@@ -78,9 +78,11 @@ echo "Tarball uploaded"
 # --- Run tests inside inner VM ---
 echo "--- :microscope: Run integration tests"
 
-# Unpack and run install_and_test.sh as root inside the inner VM
-$SSH_CMD "cd /work && tar xzf build.tar.gz && sudo bash /work/clawpot/install_and_test.sh"
-TEST_EXIT=$?
+# Unpack and run install_and_test.sh as root inside the inner VM.
+# Use || to capture exit code without triggering set -e, so we can
+# still collect artifacts on failure.
+$SSH_CMD "cd /work && tar xzf build.tar.gz && sudo bash /work/clawpot/install_and_test.sh" \
+    && TEST_EXIT=0 || TEST_EXIT=$?
 
 # --- Collect artifacts ---
 echo "--- :floppy_disk: Collect artifacts"
