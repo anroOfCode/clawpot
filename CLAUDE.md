@@ -79,7 +79,15 @@ The CI pipeline runs on a home lab VM with nested KVM. It:
 6. Runs integration tests inside the inner VM (which spawn Firecracker microVMs)
 7. Collects artifacts and destroys the VM
 
-On failure, `monitor_build.py` prints the full logs for failed jobs.
+On failure, `monitor_build.py` prints the full logs for failed jobs. It also downloads build artifacts to `.logs/<build-number>/` including:
+
+- `events.jsonl` — every server, VM, network, and test event in chronological order
+- `timeline.txt` — human-readable timeline of the entire test run
+- `events.db` — raw SQLite events database
+- `pytest-output.log` — full pytest console output
+- `server-test.log` — server stdout/stderr
+
+**When a CI build fails, always read `.logs/<build-number>/timeline.txt` first.** It shows the full chronological sequence of events — server startup, VM lifecycle steps, network requests, test start/complete — which makes it easy to see exactly where things went wrong and what happened leading up to the failure.
 
 To monitor a specific commit:
 
@@ -100,6 +108,12 @@ The process for making changes is:
 5. Open a pull request.
 6. Monitor the CI build with `python utils/monitor_build.py HEAD` and wait for it to complete. If it fails, read the logs, fix the issues, push again, and re-run the monitor. **A task is not complete until CI passes.** Do not move on or consider work done while the build is failing.
 7. If you need to make follow-up changes after the PR is open, push additional commits and run `python utils/monitor_build.py HEAD` again each time.
+
+## Event logging
+
+All server activity is recorded to a unified SQLite events database (`data/events.db`). The `tests/integration/conftest.py` plugin also writes test lifecycle events (`test.case.started`, `test.case.completed`, `test.session.completed`) into the same database, so the timeline shows tests interleaved with the server operations they triggered.
+
+When writing new integration tests, ensure the event timeline tells a coherent story. A reader should be able to look at `timeline.txt` and understand what the test did, what the server did in response, and whether it succeeded — without reading the test code. If a new server feature adds operations that aren't visible in the timeline, add `EventStore` emit calls so they show up.
 
 ## Project structure
 

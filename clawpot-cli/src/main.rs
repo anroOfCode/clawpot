@@ -49,11 +49,114 @@ enum Commands {
         #[arg(last = true)]
         command: Vec<String>,
     },
+
+    /// Query event logs from the events database
+    Logs {
+        #[command(subcommand)]
+        action: LogsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum LogsAction {
+    /// List all server sessions
+    Sessions {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+    },
+
+    /// Show events (filtered)
+    Show {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
+        /// Filter by session ID
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Filter by VM ID
+        #[arg(long)]
+        vm: Option<String>,
+
+        /// Filter by category (server, vm, network, test)
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Filter by event type
+        #[arg(long, name = "type")]
+        event_type: Option<String>,
+
+        /// Limit number of results
+        #[arg(long)]
+        limit: Option<i64>,
+    },
+
+    /// Export events as JSONL or JSON
+    Export {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
+        /// Filter by session ID
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Output format: jsonl (default) or json
+        #[arg(long, default_value = "jsonl")]
+        format: String,
+    },
+
+    /// Show a human-readable chronological timeline
+    Timeline {
+        /// Path to the events database
+        #[arg(long)]
+        db: Option<String>,
+
+        /// Filter by session ID
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Filter by VM ID
+        #[arg(long)]
+        vm: Option<String>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle logs command without gRPC connection
+    if let Commands::Logs { action } = &cli.command {
+        return match action {
+            LogsAction::Sessions { db } => commands::logs::execute_sessions(db.as_deref()),
+            LogsAction::Show {
+                db,
+                session,
+                vm,
+                category,
+                event_type,
+                limit,
+            } => commands::logs::execute_show(
+                db.as_deref(),
+                session.as_deref(),
+                vm.as_deref(),
+                category.as_deref(),
+                event_type.as_deref(),
+                *limit,
+            ),
+            LogsAction::Export {
+                db,
+                session,
+                format,
+            } => commands::logs::execute_export(db.as_deref(), session.as_deref(), format),
+            LogsAction::Timeline { db, session, vm } => {
+                commands::logs::execute_timeline(db.as_deref(), session.as_deref(), vm.as_deref())
+            }
+        };
+    }
 
     // Connect to gRPC server
     let channel = Channel::from_shared(cli.server.clone())?.connect().await?;
@@ -74,6 +177,7 @@ async fn main() -> Result<()> {
         Commands::Exec { vm_id, command } => {
             commands::exec::execute(&mut client, vm_id, command).await?;
         }
+        Commands::Logs { .. } => unreachable!(),
     }
 
     Ok(())

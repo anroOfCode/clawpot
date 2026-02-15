@@ -88,6 +88,22 @@ if [ -f "target/server-test.log" ]; then
     echo "Collected server-test.log"
 fi
 
+# --- Export events database artifacts ---
+
+EVENTS_DB="$WORK_DIR/data/events.db"
+if [ -f "$EVENTS_DB" ]; then
+    echo "Events DB found: $(ls -lh "$EVENTS_DB")"
+    # Also copy the raw DB for debugging
+    cp "$EVENTS_DB" "$ARTIFACTS_DIR/events.db"
+    "$WORK_DIR/target/debug/clawpot" logs sessions --db "$EVENTS_DB" || echo "WARNING: logs sessions failed"
+    "$WORK_DIR/target/debug/clawpot" logs export --db "$EVENTS_DB" > "$ARTIFACTS_DIR/events.jsonl" || echo "WARNING: logs export failed"
+    "$WORK_DIR/target/debug/clawpot" logs timeline --db "$EVENTS_DB" > "$ARTIFACTS_DIR/timeline.txt" || echo "WARNING: logs timeline failed"
+    echo "Collected events.jsonl ($(wc -l < "$ARTIFACTS_DIR/events.jsonl") lines) and timeline.txt ($(wc -l < "$ARTIFACTS_DIR/timeline.txt") lines)"
+else
+    echo "WARNING: Events DB not found at $EVENTS_DB"
+    ls -la "$WORK_DIR/data/" 2>/dev/null || echo "  data/ directory does not exist"
+fi
+
 echo ""
 echo "=== Test run complete (exit code: $TEST_EXIT) ==="
 echo "Artifacts:"

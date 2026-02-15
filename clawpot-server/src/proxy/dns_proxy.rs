@@ -5,9 +5,10 @@ use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use super::auth_client::AuthClient;
-use super::db::RequestDb;
+use crate::events::EventStore;
 use crate::vm::VmRegistry;
 
 const DNS_LISTEN_ADDR: &str = "0.0.0.0:10053";
@@ -16,12 +17,12 @@ const UPSTREAM_DNS: &str = "8.8.8.8:53";
 /// Start the DNS proxy. Runs until cancel is triggered.
 pub async fn run(
     registry: Arc<VmRegistry>,
-    db: RequestDb,
+    events: EventStore,
     auth: Arc<AuthClient>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     ready: tokio::sync::oneshot::Sender<()>,
 ) {
-    match run_inner(registry, db, auth, &mut cancel, ready).await {
+    match run_inner(registry, events, auth, &mut cancel, ready).await {
         Ok(()) => info!("DNS proxy shut down"),
         Err(e) => error!("DNS proxy failed: {:#}", e),
     }
@@ -29,7 +30,7 @@ pub async fn run(
 
 async fn run_inner(
     registry: Arc<VmRegistry>,
-    db: RequestDb,
+    events: EventStore,
     auth: Arc<AuthClient>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
     ready: tokio::sync::oneshot::Sender<()>,
@@ -57,7 +58,7 @@ async fn run_inner(
                 let packet = buf[..len].to_vec();
 
                 let registry = registry.clone();
-                let db = db.clone();
+                let events = events.clone();
                 let auth = auth.clone();
                 let reply_socket = udp_socket.clone();
 
@@ -65,7 +66,7 @@ async fn run_inner(
                 let upstream_socket = UdpSocket::bind("0.0.0.0:0").await;
                 if let Ok(upstream_socket) = upstream_socket {
                     tokio::spawn(async move {
-                        match process_dns_query(&packet, peer_addr, &registry, &db, &auth, &upstream_socket).await {
+                        match process_dns_query(&packet, peer_addr, &registry, &events, &auth, &upstream_socket).await {
                             Ok(response) => {
                                 if let Err(e) = reply_socket.send_to(&response, peer_addr).await {
                                     warn!("Failed to send DNS response to {}: {}", peer_addr, e);
@@ -82,11 +83,11 @@ async fn run_inner(
                 let (stream, peer_addr) = result.context("Failed to accept TCP DNS connection")?;
 
                 let registry = registry.clone();
-                let db = db.clone();
+                let events = events.clone();
                 let auth = auth.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_tcp_dns_connection(stream, peer_addr, &registry, &db, &auth).await {
+                    if let Err(e) = handle_tcp_dns_connection(stream, peer_addr, &registry, &events, &auth).await {
                         warn!("TCP DNS connection from {} failed: {:#}", peer_addr, e);
                     }
                 });
@@ -107,11 +108,12 @@ async fn process_dns_query(
     packet: &[u8],
     peer_addr: SocketAddr,
     registry: &VmRegistry,
-    db: &RequestDb,
+    events: &EventStore,
     auth: &AuthClient,
     upstream_socket: &UdpSocket,
 ) -> Result<Vec<u8>> {
     let start = Instant::now();
+    let corr_id = Uuid::new_v4().to_string();
 
     // 1. Resolve vm_id
     let vm_id = registry
@@ -123,50 +125,55 @@ async fn process_dns_query(
     let (query_name, query_type) =
         parse_dns_question(packet).unwrap_or(("unknown".to_string(), "unknown".to_string()));
 
-    // 3. Log request
-    let request_id = db
-        .log_request(
-            &vm_id,
-            "dns",
-            None,
-            None,
-            None,
-            Some(&query_name),
-            Some(&query_type),
-            None,
-            None,
-            None,
-        )
-        .unwrap_or(0);
+    // 3. Log request event
+    events.emit(
+        "network.dns.request",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        &serde_json::json!({
+            "query_name": query_name,
+            "query_type": query_type,
+        }),
+    );
 
     // 4. Authorize
     let auth_start = Instant::now();
     let (allowed, reason) = auth
-        .authorize_dns(request_id, &vm_id, &query_name, &query_type)
+        .authorize_dns(0, &vm_id, &query_name, &query_type)
         .await
         .unwrap_or((false, "auth error".to_string()));
     let auth_latency = auth_start.elapsed().as_millis() as i64;
 
-    if request_id > 0 {
-        let _ = db.log_authorization(request_id, allowed, &reason, auth_latency);
-    }
+    events.emit(
+        "network.dns.authorized",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        &serde_json::json!({
+            "allowed": allowed,
+            "reason": reason,
+            "latency_ms": auth_latency,
+        }),
+    );
 
     // 5. If denied, respond with REFUSED
     if !allowed {
         let refused = build_refused_response(packet);
         let duration_ms = start.elapsed().as_millis() as i64;
-        if request_id > 0 {
-            let _ = db.log_response(
-                request_id,
-                Some(5),
-                None,
-                None,
-                None,
-                None,
-                Some("REFUSED"),
-                duration_ms,
-            );
-        }
+        events.emit_with_duration(
+            "network.dns.response",
+            "network",
+            Some(&vm_id),
+            Some(&corr_id),
+            duration_ms,
+            Some(false),
+            &serde_json::json!({
+                "rcode": 5,
+                "answers": "REFUSED",
+                "duration_ms": duration_ms,
+            }),
+        );
         return Ok(refused);
     }
 
@@ -195,18 +202,19 @@ async fn process_dns_query(
         None
     };
 
-    if request_id > 0 {
-        let _ = db.log_response(
-            request_id,
-            rcode,
-            Some(resp_len as i64),
-            None,
-            None,
-            None,
-            None,
-            duration_ms,
-        );
-    }
+    events.emit_with_duration(
+        "network.dns.response",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        duration_ms,
+        Some(rcode == Some(0)),
+        &serde_json::json!({
+            "rcode": rcode,
+            "resp_size": resp_len,
+            "duration_ms": duration_ms,
+        }),
+    );
 
     Ok(response)
 }
@@ -216,7 +224,7 @@ async fn handle_tcp_dns_connection(
     mut stream: TcpStream,
     peer_addr: SocketAddr,
     registry: &VmRegistry,
-    db: &RequestDb,
+    events: &EventStore,
     auth: &AuthClient,
 ) -> Result<()> {
     loop {
@@ -250,8 +258,15 @@ async fn handle_tcp_dns_connection(
             .await
             .context("Failed to bind upstream UDP socket for TCP DNS")?;
 
-        let response =
-            process_dns_query(&msg_buf, peer_addr, registry, db, auth, &upstream_socket).await?;
+        let response = process_dns_query(
+            &msg_buf,
+            peer_addr,
+            registry,
+            events,
+            auth,
+            &upstream_socket,
+        )
+        .await?;
 
         // Write length-prefixed response
         write_dns_message(&mut stream, &response).await?;

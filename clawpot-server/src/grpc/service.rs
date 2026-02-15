@@ -1,4 +1,6 @@
 use crate::agent;
+use crate::clawpot_event;
+use crate::events::EventStore;
 use crate::network::{ip_allocator::IpAllocator, NetworkManager};
 use crate::vm::{VmEntry, VmRegistry};
 use clawpot_common::firecracker::VmConfig;
@@ -10,10 +12,10 @@ use clawpot_common::proto::{
 use clawpot_common::vm::VmManager;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
-use tracing::{error, info, warn, Span};
+use tracing::{error, Span};
 use uuid::Uuid;
 
 const GUEST_CID: u32 = 3;
@@ -25,6 +27,7 @@ pub struct ClawpotServiceImpl {
     network_manager: Arc<NetworkManager>,
     kernel_path: PathBuf,
     rootfs_path: PathBuf,
+    event_store: EventStore,
 }
 
 impl ClawpotServiceImpl {
@@ -34,6 +37,7 @@ impl ClawpotServiceImpl {
         network_manager: Arc<NetworkManager>,
         kernel_path: PathBuf,
         rootfs_path: PathBuf,
+        event_store: EventStore,
     ) -> Self {
         Self {
             vm_registry,
@@ -41,6 +45,7 @@ impl ClawpotServiceImpl {
             network_manager,
             kernel_path,
             rootfs_path,
+            event_store,
         }
     }
 }
@@ -61,30 +66,37 @@ impl ClawpotService for ClawpotServiceImpl {
         &self,
         request: Request<CreateVmRequest>,
     ) -> Result<Response<CreateVmResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
         let span = Span::current();
         let vcpu_count_val = req.vcpu_count.unwrap_or(1);
         let mem_size_mib_val = req.mem_size_mib.unwrap_or(256);
         span.record("vcpu_count", vcpu_count_val);
         span.record("mem_size_mib", mem_size_mib_val);
-        info!(
-            "CreateVM request: vcpus={:?}, memory={:?}",
-            req.vcpu_count, req.mem_size_mib
-        );
 
         // Generate VM ID
         let vm_id = Uuid::new_v4();
-        span.record("vm_id", vm_id.to_string().as_str());
-        info!("Generated VM ID: {}", vm_id);
+        let vm_id_str = vm_id.to_string();
+        span.record("vm_id", vm_id_str.as_str());
+
+        clawpot_event!(self.event_store, "vm.create.started", "vm", vm_id = vm_id_str, {
+            "vcpu_count": vcpu_count_val,
+            "mem_size_mib": mem_size_mib_val
+        });
 
         // Allocate IP address
         let ip_address = self.ip_allocator.lock().await.allocate().map_err(|e| {
-            error!("Failed to allocate IP: {}", e);
+            clawpot_event!(self.event_store, "vm.create.failed", "vm", vm_id = vm_id_str, {
+                "error": e.to_string(),
+                "step": "ip_allocation"
+            });
             Status::resource_exhausted(format!("No available IP addresses: {e}"))
         })?;
 
         span.record("ip_address", ip_address.to_string().as_str());
-        info!("Allocated IP address: {}", ip_address);
+        clawpot_event!(self.event_store, "vm.create.ip_allocated", "vm", vm_id = vm_id_str, {
+            "ip_address": ip_address.to_string()
+        });
 
         // Create TAP device name (max 15 chars for Linux interface names)
         let uuid_short = &vm_id.simple().to_string()[..11];
@@ -93,13 +105,18 @@ impl ClawpotService for ClawpotServiceImpl {
         // Create and configure TAP device
         if let Err(e) = self.network_manager.create_tap(&tap_name, ip_address).await {
             let _ = self.ip_allocator.lock().await.release(ip_address);
-            error!("Failed to create TAP device: {}", e);
+            clawpot_event!(self.event_store, "vm.create.failed", "vm", vm_id = vm_id_str, {
+                "error": e.to_string(),
+                "step": "tap_creation"
+            });
             return Err(Status::internal(format!(
                 "Failed to create TAP device: {e}"
             )));
         }
 
-        info!("Created TAP device: {}", tap_name);
+        clawpot_event!(self.event_store, "vm.create.tap_created", "vm", vm_id = vm_id_str, {
+            "tap_name": tap_name
+        });
 
         // Build VM configuration
         let vcpu_count = req.vcpu_count.unwrap_or(1) as u8;
@@ -123,21 +140,32 @@ impl ClawpotService for ClawpotServiceImpl {
         if let Err(e) = manager.start(config).await {
             let _ = self.network_manager.delete_tap(&tap_name, ip_address).await;
             let _ = self.ip_allocator.lock().await.release(ip_address);
-            error!("Failed to start VM: {}", e);
+            clawpot_event!(self.event_store, "vm.create.failed", "vm", vm_id = vm_id_str, {
+                "error": e.to_string(),
+                "step": "firecracker_start"
+            });
             return Err(Status::internal(format!("Failed to start VM: {e}")));
         }
 
-        info!("VM {} started successfully", vm_id);
+        clawpot_event!(self.event_store, "vm.create.firecracker_started", "vm", vm_id = vm_id_str, {
+            "socket_path": socket_path.to_string_lossy().to_string(),
+            "vsock_uds_path": vsock_uds_path
+        });
 
         // Wait for guest agent to become ready (non-fatal)
-        info!("Waiting for guest agent on VM {}...", vm_id);
+        let agent_start = Instant::now();
         match agent::client::AgentClient::wait_ready(&vsock_uds_path, Duration::from_secs(30)).await
         {
-            Ok(_) => info!("Guest agent ready on VM {}", vm_id),
-            Err(e) => warn!(
-                "Guest agent not ready on VM {} (will retry on exec): {}",
-                vm_id, e
-            ),
+            Ok(_) => {
+                clawpot_event!(self.event_store, "vm.create.agent_ready", "vm", vm_id = vm_id_str, {
+                    "wait_ms": agent_start.elapsed().as_millis() as i64
+                });
+            }
+            Err(e) => {
+                clawpot_event!(self.event_store, "vm.create.agent_timeout", "vm", vm_id = vm_id_str, {
+                    "error": e.to_string()
+                });
+            }
         }
 
         // Create VM entry
@@ -154,9 +182,26 @@ impl ClawpotService for ClawpotServiceImpl {
 
         // Insert into registry
         if let Err(e) = self.vm_registry.insert(vm_id, entry).await {
-            error!("Failed to insert VM into registry: {}", e);
+            clawpot_event!(self.event_store, "vm.create.failed", "vm", vm_id = vm_id_str, {
+                "error": e.to_string(),
+                "step": "registry_insert"
+            });
             return Err(Status::internal(format!("Failed to register VM: {e}")));
         }
+
+        let duration_ms = start.elapsed().as_millis() as i64;
+        self.event_store.emit_with_duration(
+            "vm.create.completed",
+            "vm",
+            Some(&vm_id_str),
+            None,
+            duration_ms,
+            Some(true),
+            &serde_json::json!({
+                "ip_address": ip_address.to_string(),
+                "socket_path": socket_path.to_string_lossy().to_string(),
+            }),
+        );
 
         Ok(Response::new(CreateVmResponse {
             vm_id: vm_id.to_string(),
@@ -170,21 +215,27 @@ impl ClawpotService for ClawpotServiceImpl {
         &self,
         request: Request<DeleteVmRequest>,
     ) -> Result<Response<DeleteVmResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
         Span::current().record("vm_id", req.vm_id.as_str());
-        info!("DeleteVM request: vm_id={}", req.vm_id);
 
-        let vm_id = Uuid::parse_str(&req.vm_id).map_err(|e| {
-            error!("Invalid VM ID format: {}", e);
-            Status::invalid_argument(format!("Invalid VM ID: {e}"))
-        })?;
+        let vm_id = Uuid::parse_str(&req.vm_id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid VM ID: {e}")))?;
+        let vm_id_str = vm_id.to_string();
 
-        let mut entry = self.vm_registry.remove(&vm_id).await.map_err(|e| {
-            error!("VM not found: {}", e);
-            Status::not_found(format!("VM not found: {e}"))
-        })?;
+        clawpot_event!(
+            self.event_store,
+            "vm.delete.started",
+            "vm",
+            vm_id = vm_id_str,
+            {}
+        );
 
-        info!("Removed VM {} from registry", vm_id);
+        let mut entry = self
+            .vm_registry
+            .remove(&vm_id)
+            .await
+            .map_err(|e| Status::not_found(format!("VM not found: {e}")))?;
 
         if let Err(e) = entry.manager.stop().await {
             error!("Failed to stop VM {}: {}", vm_id, e);
@@ -205,7 +256,16 @@ impl ClawpotService for ClawpotServiceImpl {
         // Clean up vsock UDS
         let _ = std::fs::remove_file(&entry.vsock_uds_path);
 
-        info!("VM {} deleted successfully", vm_id);
+        let duration_ms = start.elapsed().as_millis() as i64;
+        self.event_store.emit_with_duration(
+            "vm.delete.completed",
+            "vm",
+            Some(&vm_id_str),
+            None,
+            duration_ms,
+            Some(true),
+            &serde_json::json!({}),
+        );
 
         Ok(Response::new(DeleteVmResponse { success: true }))
     }
@@ -215,8 +275,6 @@ impl ClawpotService for ClawpotServiceImpl {
         &self,
         _request: Request<ListVmsRequest>,
     ) -> Result<Response<ListVmsResponse>, Status> {
-        info!("ListVMs request");
-
         let vms_list = self.vm_registry.list().await;
 
         let vms: Vec<VmInfo> = vms_list
@@ -242,7 +300,6 @@ impl ClawpotService for ClawpotServiceImpl {
             .collect();
 
         Span::current().record("vm_count", vms.len());
-        info!("Returning {} VMs", vms.len());
 
         Ok(Response::new(ListVmsResponse { vms }))
     }
@@ -256,11 +313,11 @@ impl ClawpotService for ClawpotServiceImpl {
         &self,
         request: Request<ExecVmRequest>,
     ) -> Result<Response<ExecVmResponse>, Status> {
+        let start = Instant::now();
         let req = request.into_inner();
         let span = Span::current();
         span.record("vm_id", req.vm_id.as_str());
         span.record("command", req.command.as_str());
-        info!("ExecVM request: vm_id={}, cmd={}", req.vm_id, req.command);
 
         let vm_id = Uuid::parse_str(&req.vm_id)
             .map_err(|e| Status::invalid_argument(format!("Invalid VM ID: {e}")))?;
@@ -276,8 +333,8 @@ impl ClawpotService for ClawpotServiceImpl {
             .map_err(|e| Status::unavailable(format!("Failed to connect to agent: {e}")))?;
 
         let agent_req = clawpot_common::agent_proto::ExecRequest {
-            command: req.command,
-            args: req.args,
+            command: req.command.clone(),
+            args: req.args.clone(),
             env: req.env,
             working_dir: req.working_dir,
         };
@@ -288,6 +345,24 @@ impl ClawpotService for ClawpotServiceImpl {
             .map_err(|e| Status::internal(format!("Agent exec failed: {e}")))?;
 
         span.record("exit_code", agent_resp.exit_code);
+
+        let duration_ms = start.elapsed().as_millis() as i64;
+        let vm_id_str = vm_id.to_string();
+        self.event_store.emit_with_duration(
+            "vm.exec",
+            "vm",
+            Some(&vm_id_str),
+            None,
+            duration_ms,
+            Some(agent_resp.exit_code == 0),
+            &serde_json::json!({
+                "command": req.command,
+                "args": req.args,
+                "exit_code": agent_resp.exit_code,
+                "stdout_len": agent_resp.stdout.len(),
+                "stderr_len": agent_resp.stderr.len(),
+            }),
+        );
 
         Ok(Response::new(ExecVmResponse {
             exit_code: agent_resp.exit_code,

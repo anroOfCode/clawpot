@@ -2,6 +2,7 @@
 """Monitor a Buildkite build by commit SHA, polling until it completes.
 
 On failure, prints all job logs to the console.
+After completion, downloads artifacts to .logs/<build-number>/.
 
 Usage:
     python utils/monitor_build.py <commit-sha>
@@ -20,6 +21,7 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import json
@@ -54,6 +56,45 @@ def api_get(token: str, path: str) -> dict | list | str:
             return None
         print(f"API error {e.code}: {e.read().decode()}", file=sys.stderr)
         sys.exit(1)
+
+
+def api_download(token: str, url: str, dest: Path):
+    """Download a file from a Buildkite artifact URL.
+
+    Buildkite's download_url returns a 302 redirect to a presigned storage URL.
+    We must NOT forward the Authorization header to the storage backend (it
+    rejects it with 400), so we manually follow the redirect.
+    """
+    import urllib.request
+
+    class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None  # Don't follow redirects automatically
+
+    opener = urllib.request.build_opener(NoRedirectHandler)
+    req = Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        opener.open(req)
+    except urllib.error.HTTPError as e:
+        if e.code in (301, 302, 303, 307, 308):
+            # Follow the redirect without the auth header
+            redirect_url = e.headers.get("Location")
+            if redirect_url:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with urlopen(redirect_url) as resp:
+                    dest.write_bytes(resp.read())
+                return
+        print(f"  Download failed ({e.code}): {dest.name}", file=sys.stderr)
+        return
+
+    # If no redirect (shouldn't happen), try direct download
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req2 = Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urlopen(req2) as resp:
+            dest.write_bytes(resp.read())
+    except HTTPError as e:
+        print(f"  Download failed ({e.code}): {dest.name}", file=sys.stderr)
 
 
 def resolve_commit(ref: str) -> str:
@@ -150,15 +191,64 @@ def print_build_status(build: dict):
         name = job.get("name", job.get("id", "?"))
         jstate = job.get("state", "unknown")
         jsym = state_symbol(jstate)
-        duration = ""
-        if job.get("started_at") and job.get("finished_at"):
-            # Parse ISO timestamps to compute duration
-            pass
         print(f"    {jsym} {name}: {jstate}")
 
 
+def download_artifacts(token: str, org: str, pipeline: str, build: dict, logs_dir: Path):
+    """Download all build artifacts to the logs directory."""
+    build_number = build["number"]
+    artifacts = api_get(
+        token,
+        f"/organizations/{org}/pipelines/{pipeline}/builds/{build_number}/artifacts",
+    )
+
+    if not artifacts:
+        print("\nNo artifacts to download.")
+        return
+
+    # Filter out build.tar.gz (large, not useful for inspection)
+    artifacts = [a for a in artifacts if a.get("filename") != "build.tar.gz"]
+
+    if not artifacts:
+        print("\nNo artifacts to download (only build.tar.gz found).")
+        return
+
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\nDownloading {len(artifacts)} artifact(s) to {logs_dir}/")
+
+    for artifact in artifacts:
+        filename = artifact.get("filename", "unknown")
+        download_url = artifact.get("download_url")
+        file_size = artifact.get("file_size", 0)
+
+        if not download_url:
+            continue
+
+        dest = logs_dir / filename
+        api_download(token, download_url, dest)
+
+        size_str = f"{file_size:,}" if file_size else "0"
+        print(f"  {filename} ({size_str} bytes)")
+
+    # Print a quick summary of text artifacts
+    print()
+    for artifact in artifacts:
+        filename = artifact.get("filename", "")
+        dest = logs_dir / filename
+        if dest.exists() and dest.suffix in (".jsonl", ".txt", ".log", ".xml"):
+            size = dest.stat().st_size
+            if size == 0:
+                print(f"  \033[33m{filename}: empty (0 bytes)\033[0m")
+            elif filename.endswith(".jsonl"):
+                lines = dest.read_text().strip().count("\n") + 1 if size > 0 else 0
+                print(f"  {filename}: {lines} event(s)")
+            elif filename.endswith(".txt") and "timeline" in filename:
+                lines = dest.read_text().strip().count("\n") + 1 if size > 0 else 0
+                print(f"  {filename}: {lines} line(s)")
+
+
 def monitor(token: str, org: str, pipeline: str, commit: str,
-            poll_interval: int, timeout: int):
+            poll_interval: int, timeout: int, logs_dir: Path):
     build = wait_for_build(token, org, pipeline, commit, poll_interval, timeout)
     build_number = build["number"]
     url = build.get("web_url", "")
@@ -195,6 +285,10 @@ def monitor(token: str, org: str, pipeline: str, commit: str,
     else:
         print(f"Build #{build_number} ended with state: {state}")
     print(f"{'='*60}")
+
+    # Download artifacts
+    build_logs_dir = logs_dir / str(build_number)
+    download_artifacts(token, org, pipeline, build, build_logs_dir)
 
     return 0 if state == "passed" else 1
 
@@ -243,14 +337,31 @@ def main():
         "--timeout", type=int, default=DEFAULT_BUILD_WAIT_TIMEOUT,
         help=f"Seconds to wait for build to appear (default: {DEFAULT_BUILD_WAIT_TIMEOUT})",
     )
+    parser.add_argument(
+        "--logs-dir", type=Path, default=None,
+        help="Directory for artifacts (default: .logs/ in repo root)",
+    )
     args = parser.parse_args()
 
     token = get_token()
     commit = resolve_commit(args.commit)
     print(f"Monitoring build for commit {commit[:10]}...")
 
+    # Default logs dir: .logs/ in the git repo root
+    if args.logs_dir:
+        logs_dir = args.logs_dir
+    else:
+        try:
+            repo_root = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            logs_dir = Path(repo_root) / ".logs"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logs_dir = Path(".logs")
+
     exit_code = monitor(token, args.org, args.pipeline, commit,
-                        args.poll_interval, args.timeout)
+                        args.poll_interval, args.timeout, logs_dir)
     sys.exit(exit_code)
 
 

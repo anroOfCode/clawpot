@@ -12,10 +12,11 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 
 use super::auth_client::AuthClient;
 use super::body_store::BodyStore;
-use super::db::RequestDb;
+use crate::events::EventStore;
 use crate::vm::VmRegistry;
 
 const HTTP_LISTEN_ADDR: &str = "0.0.0.0:10080";
@@ -24,7 +25,7 @@ const HTTPS_LISTEN_ADDR: &str = "0.0.0.0:10081";
 /// Shared context for the HTTP proxy handlers.
 struct ProxyCtx {
     registry: Arc<VmRegistry>,
-    db: RequestDb,
+    events: EventStore,
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
     use_tls_upstream: bool,
@@ -37,7 +38,7 @@ struct ProxyCtx {
 /// Start both HTTP proxy listeners (plain HTTP + TLS upstream).
 pub async fn run(
     registry: Arc<VmRegistry>,
-    db: RequestDb,
+    events: EventStore,
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
@@ -86,7 +87,7 @@ pub async fn run(
 
     let http_ctx = Arc::new(ProxyCtx {
         registry: registry.clone(),
-        db: db.clone(),
+        events: events.clone(),
         body_store: body_store.clone(),
         auth: auth.clone(),
         use_tls_upstream: false,
@@ -95,7 +96,7 @@ pub async fn run(
 
     let https_ctx = Arc::new(ProxyCtx {
         registry,
-        db,
+        events,
         body_store,
         auth,
         use_tls_upstream: true,
@@ -182,6 +183,7 @@ async fn handle_request_inner(
     ctx: Arc<ProxyCtx>,
 ) -> Result<Response<Full<Bytes>>> {
     let start = Instant::now();
+    let corr_id = Uuid::new_v4().to_string();
 
     // 1. Resolve vm_id from source IP
     let vm_id = ctx
@@ -226,74 +228,64 @@ async fn handle_request_inner(
         .map(http_body_util::Collected::to_bytes)
         .unwrap_or_default();
 
-    // 3. Log request
+    // 3. Store body and log request event
     let stored_body = ctx.body_store.store(0, "req", &req_body).ok();
-    let (body_inline, body_path) = match &stored_body {
-        Some(super::body_store::StoredBody::Inline(b)) => (Some(b.as_slice()), None),
-        Some(super::body_store::StoredBody::External(p)) => (None, p.to_str()),
-        None => (None, None),
+    let req_body_path = match &stored_body {
+        Some(super::body_store::StoredBody::External(p)) => Some(p.to_string_lossy().to_string()),
+        _ => None,
     };
 
-    let request_id = ctx
-        .db
-        .log_request(
-            &vm_id,
-            if ctx.use_tls_upstream {
-                "https"
-            } else {
-                "http"
-            },
-            Some(&method),
-            Some(&url),
-            Some(&headers_json),
-            None,
-            None,
-            Some(req_body.len() as i64),
-            body_inline,
-            body_path,
-        )
-        .unwrap_or_else(|e| {
-            warn!("Failed to log request: {}", e);
-            0
-        });
-
-    // Re-store body with correct request_id if it was externalized
-    if request_id > 0 {
-        if let Some(super::body_store::StoredBody::External(_)) = &stored_body {
-            let _ = ctx.body_store.store(request_id, "req", &req_body);
-        }
-    }
+    ctx.events.emit(
+        "network.http.request",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        &serde_json::json!({
+            "method": method,
+            "url": url,
+            "headers": headers_json,
+            "req_body_size": req_body.len(),
+            "req_body_path": req_body_path,
+        }),
+    );
 
     // 4. Authorize
     let auth_start = Instant::now();
     let (allowed, reason) = ctx
         .auth
-        .authorize_http(request_id, &vm_id, &method, &url, &headers_map, &req_body)
+        .authorize_http(0, &vm_id, &method, &url, &headers_map, &req_body)
         .await
         .unwrap_or((false, "auth error".to_string()));
     let auth_latency = auth_start.elapsed().as_millis() as i64;
 
-    if request_id > 0 {
-        let _ = ctx
-            .db
-            .log_authorization(request_id, allowed, &reason, auth_latency);
-    }
+    ctx.events.emit(
+        "network.http.authorized",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        &serde_json::json!({
+            "allowed": allowed,
+            "reason": reason,
+            "latency_ms": auth_latency,
+        }),
+    );
 
     // 5. If denied, return 403
     if !allowed {
         let duration_ms = start.elapsed().as_millis() as i64;
-        if request_id > 0 {
-            let _ = ctx.db.log_response(
-                request_id,
-                Some(403),
-                Some(0),
-                None,
-                None,
-                None,
-                None,
-                duration_ms,
-            );
-        }
+        ctx.events.emit_with_duration(
+            "network.http.response",
+            "network",
+            Some(&vm_id),
+            Some(&corr_id),
+            duration_ms,
+            Some(false),
+            &serde_json::json!({
+                "status_code": 403,
+                "resp_body_size": 0,
+                "duration_ms": duration_ms,
+            }),
+        );
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
             .body(Full::new(Bytes::from(format!("Denied: {reason}"))))
@@ -337,27 +329,29 @@ async fn handle_request_inner(
         .map(http_body_util::Collected::to_bytes)
         .unwrap_or_default();
 
-    // 7. Log response
+    // 7. Log response event
     let duration_ms = start.elapsed().as_millis() as i64;
-    if request_id > 0 {
-        let stored_resp = ctx.body_store.store(request_id, "resp", &resp_body).ok();
-        let (resp_inline, resp_path) = match &stored_resp {
-            Some(super::body_store::StoredBody::Inline(b)) => (Some(b.as_slice()), None),
-            Some(super::body_store::StoredBody::External(p)) => (None, p.to_str()),
-            None => (None, None),
-        };
+    let stored_resp = ctx.body_store.store(0, "resp", &resp_body).ok();
+    let resp_body_path = match &stored_resp {
+        Some(super::body_store::StoredBody::External(p)) => Some(p.to_string_lossy().to_string()),
+        _ => None,
+    };
 
-        let _ = ctx.db.log_response(
-            request_id,
-            Some(i32::from(status.as_u16())),
-            Some(resp_body.len() as i64),
-            resp_inline,
-            resp_path,
-            Some(&resp_headers_json),
-            None,
-            duration_ms,
-        );
-    }
+    ctx.events.emit_with_duration(
+        "network.http.response",
+        "network",
+        Some(&vm_id),
+        Some(&corr_id),
+        duration_ms,
+        Some(status.is_success()),
+        &serde_json::json!({
+            "status_code": status.as_u16(),
+            "resp_body_size": resp_body.len(),
+            "resp_body_path": resp_body_path,
+            "resp_headers": resp_headers_json,
+            "duration_ms": duration_ms,
+        }),
+    );
 
     // 8. Return response to VM
     let mut response = Response::builder().status(status);
