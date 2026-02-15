@@ -116,7 +116,9 @@ async fn process_dns_query(
     let corr_id = Uuid::new_v4().to_string();
 
     // 1. Resolve vm_id — block unknown sources
-    let vm_id = if let Some(id) = registry.find_by_ip(peer_addr.ip()).await { id.to_string() } else {
+    let vm_id = if let Some(id) = registry.find_by_ip(peer_addr.ip()).await {
+        id.to_string()
+    } else {
         warn!(
             "Blocking DNS request from unknown source IP: {}",
             peer_addr.ip()

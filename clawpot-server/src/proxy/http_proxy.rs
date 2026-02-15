@@ -215,7 +215,9 @@ async fn handle_request_inner(
     let corr_id = Uuid::new_v4().to_string();
 
     // 1. Resolve vm_id from source IP — block unknown sources
-    let vm_id = if let Some(id) = ctx.registry.find_by_ip(peer_addr.ip()).await { id.to_string() } else {
+    let vm_id = if let Some(id) = ctx.registry.find_by_ip(peer_addr.ip()).await {
+        id.to_string()
+    } else {
         warn!(
             "Blocking HTTP request from unknown source IP: {}",
             peer_addr.ip()
