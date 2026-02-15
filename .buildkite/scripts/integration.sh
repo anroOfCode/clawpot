@@ -75,6 +75,22 @@ echo "--- :arrow_up: Upload build tarball to inner VM"
 $SCP_CMD "$TARBALL" "${INNER_VM_SSH_USER}@${INNER_VM_SSH_HOST}:/work/build.tar.gz"
 echo "Tarball uploaded"
 
+# --- Forward API key secrets to inner VM ---
+_secrets_file=$(mktemp)
+for _var in CLAWPOT_ANTHROPIC_API_KEY CLAWPOT_OPENAI_API_KEY; do
+    if [ -n "${!_var:-}" ]; then
+        printf 'export %s=%q\n' "$_var" "${!_var}" >> "$_secrets_file"
+    fi
+done
+if [ -s "$_secrets_file" ]; then
+    $SCP_CMD "$_secrets_file" "${INNER_VM_SSH_USER}@${INNER_VM_SSH_HOST}:/work/.secrets"
+    $SSH_CMD "chmod 600 /work/.secrets"
+    echo "Forwarded API key secrets to inner VM"
+else
+    echo "No API key secrets to forward"
+fi
+rm -f "$_secrets_file"
+
 # --- Run tests inside inner VM ---
 echo "--- :microscope: Run integration tests"
 

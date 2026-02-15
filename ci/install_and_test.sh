@@ -23,6 +23,13 @@ mkdir -p "$ARTIFACTS_DIR"
 cd "$WORK_DIR"
 export CLAWPOT_ROOT="$WORK_DIR"
 
+# Source API key secrets if forwarded from the outer VM
+if [ -f /work/.secrets ]; then
+    # shellcheck disable=SC1091
+    source /work/.secrets
+    rm -f /work/.secrets
+fi
+
 echo "=== Clawpot Integration Test Runner ==="
 echo "Working directory: $WORK_DIR"
 echo "Artifacts directory: $ARTIFACTS_DIR"
