@@ -1,3 +1,6 @@
+agents:
+  queue: "build"
+
 steps:
   - label: ":lint-roller: Lint"
     key: "lint"
