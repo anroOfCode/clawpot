@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use super::auth_client::AuthClient;
 use super::body_store::BodyStore;
+use super::llm::{self, LlmKeyStore};
 use crate::events::EventStore;
 use crate::vm::VmRegistry;
 
@@ -28,6 +29,7 @@ struct ProxyCtx {
     events: EventStore,
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
+    llm_keys: Arc<LlmKeyStore>,
     use_tls_upstream: bool,
     http_client: Client<
         hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
@@ -41,6 +43,7 @@ pub async fn run(
     events: EventStore,
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
+    llm_keys: Arc<LlmKeyStore>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()> {
@@ -90,6 +93,7 @@ pub async fn run(
         events: events.clone(),
         body_store: body_store.clone(),
         auth: auth.clone(),
+        llm_keys: llm_keys.clone(),
         use_tls_upstream: false,
         http_client: http_client.clone(),
     });
@@ -99,6 +103,7 @@ pub async fn run(
         events,
         body_store,
         auth,
+        llm_keys,
         use_tls_upstream: true,
         http_client,
     });
@@ -292,6 +297,32 @@ async fn handle_request_inner(
             .unwrap());
     }
 
+    // 5b. Detect LLM API request
+    let llm_detection = llm::detect_llm_request(&host, &path, &headers_map, &ctx.llm_keys);
+
+    if let Some(ref det) = llm_detection {
+        let req_body_json: serde_json::Value =
+            serde_json::from_slice(&req_body).unwrap_or(serde_json::Value::Null);
+        let (model, message_count, streaming) =
+            llm::extract_request_summary(&det.endpoint, &req_body);
+
+        ctx.events.emit(
+            "llm.request",
+            "llm",
+            Some(&vm_id),
+            Some(&corr_id),
+            &serde_json::json!({
+                "provider": det.provider,
+                "endpoint": det.endpoint,
+                "model": model,
+                "message_count": message_count,
+                "streaming": streaming,
+                "url": url,
+                "body": req_body_json,
+            }),
+        );
+    }
+
     // 6. Forward to upstream
     let upstream_uri: hyper::Uri = url
         .parse()
@@ -300,7 +331,23 @@ async fn handle_request_inner(
     let mut upstream_req = Request::builder().method(parts.method).uri(&upstream_uri);
 
     for (key, value) in &parts.headers {
+        let key_str = key.as_str().to_lowercase();
+        // Strip VM-provided auth header if we're injecting a server-managed key
+        if let Some(ref det) = llm_detection {
+            if let Some(ref strip) = det.strip_header {
+                if key_str == strip.to_lowercase() {
+                    continue;
+                }
+            }
+        }
         upstream_req = upstream_req.header(key, value);
+    }
+
+    // Inject server-managed API key
+    if let Some(ref det) = llm_detection {
+        if let Some((ref header_name, ref header_value)) = det.inject_header {
+            upstream_req = upstream_req.header(header_name.as_str(), header_value.as_str());
+        }
     }
 
     let upstream_req = upstream_req
@@ -329,8 +376,33 @@ async fn handle_request_inner(
         .map(http_body_util::Collected::to_bytes)
         .unwrap_or_default();
 
-    // 7. Log response event
+    // 7. Log LLM response event (before generic network event)
     let duration_ms = start.elapsed().as_millis() as i64;
+    if let Some(ref det) = llm_detection {
+        let resp_content_type = resp_headers.get("content-type").map(String::as_str);
+        let (body_json, model, input_tokens, output_tokens) =
+            llm::process_response(&det.endpoint, resp_content_type, &resp_body);
+
+        ctx.events.emit_with_duration(
+            "llm.response",
+            "llm",
+            Some(&vm_id),
+            Some(&corr_id),
+            duration_ms,
+            Some(status.is_success()),
+            &serde_json::json!({
+                "provider": det.provider,
+                "endpoint": det.endpoint,
+                "model": model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "status_code": status.as_u16(),
+                "body": body_json,
+            }),
+        );
+    }
+
+    // 8. Log response event
     let stored_resp = ctx.body_store.store(0, "resp", &resp_body).ok();
     let resp_body_path = match &stored_resp {
         Some(super::body_store::StoredBody::External(p)) => Some(p.to_string_lossy().to_string()),
@@ -353,7 +425,7 @@ async fn handle_request_inner(
         }),
     );
 
-    // 8. Return response to VM
+    // 9. Return response to VM
     let mut response = Response::builder().status(status);
     for (key, value) in &resp_headers {
         // Skip hop-by-hop headers

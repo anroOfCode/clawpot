@@ -342,6 +342,44 @@ fn format_data_summary(event_type: &str, data: &serde_json::Value) -> String {
                 .unwrap_or(-1);
             format!("{cmd} exit={exit}")
         }
+        "llm.request" => {
+            let provider = data.get("provider").and_then(|v| v.as_str()).unwrap_or("?");
+            let endpoint = data.get("endpoint").and_then(|v| v.as_str()).unwrap_or("?");
+            let model = data
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let messages = data
+                .get("message_count")
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(String::new, |n| format!(" messages={n}"));
+            let streaming = data
+                .get("streaming")
+                .and_then(serde_json::Value::as_bool)
+                .map_or_else(String::new, |s| format!(" streaming={s}"));
+            format!("{provider}/{endpoint} model={model}{messages}{streaming}")
+        }
+        "llm.response" => {
+            let provider = data.get("provider").and_then(|v| v.as_str()).unwrap_or("?");
+            let endpoint = data.get("endpoint").and_then(|v| v.as_str()).unwrap_or("?");
+            let model = data
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let input = data.get("input_tokens").and_then(serde_json::Value::as_u64);
+            let output = data
+                .get("output_tokens")
+                .and_then(serde_json::Value::as_u64);
+            let tokens = match (input, output) {
+                (Some(i), Some(o)) => format!(" tokens={i}+{o}"),
+                _ => String::new(),
+            };
+            let status = data
+                .get("status_code")
+                .and_then(serde_json::Value::as_u64)
+                .map_or_else(String::new, |s| format!(" status={s}"));
+            format!("{provider}/{endpoint} model={model}{tokens}{status}")
+        }
         _ => {
             // Compact JSON for other types
             let s = serde_json::to_string(data).unwrap_or_default();
