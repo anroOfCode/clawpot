@@ -4,4 +4,5 @@ pub mod ca;
 pub mod dns_proxy;
 pub mod http_proxy;
 pub mod llm;
+pub mod proxy_protocol;
 pub mod tls_mitm;

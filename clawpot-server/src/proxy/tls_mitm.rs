@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use rustls::ServerConfig;
 use std::io::Cursor;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -44,7 +45,7 @@ async fn run_inner(
                 let (stream, addr) = result.context("Failed to accept connection")?;
                 let ca = ca.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(stream, ca).await {
+                    if let Err(e) = handle_connection(stream, addr, ca).await {
                         warn!("MITM connection from {} failed: {:#}", addr, e);
                     }
                 });
@@ -59,7 +60,11 @@ async fn run_inner(
     Ok(())
 }
 
-async fn handle_connection(stream: TcpStream, ca: Arc<CertificateAuthority>) -> Result<()> {
+async fn handle_connection(
+    stream: TcpStream,
+    client_addr: SocketAddr,
+    ca: Arc<CertificateAuthority>,
+) -> Result<()> {
     // Peek at the TLS ClientHello to extract SNI
     let mut buf = vec![0u8; 4096];
     let n = stream
@@ -89,9 +94,13 @@ async fn handle_connection(stream: TcpStream, ca: Arc<CertificateAuthority>) -> 
         .context("TLS handshake failed")?;
 
     // Connect to HTTP proxy's TLS-upstream listener
-    let proxy_stream = TcpStream::connect(HTTP_PROXY_TLS_ADDR)
+    let mut proxy_stream = TcpStream::connect(HTTP_PROXY_TLS_ADDR)
         .await
         .with_context(|| format!("Failed to connect to HTTP proxy at {HTTP_PROXY_TLS_ADDR}"))?;
+
+    // Write PROXY protocol v1 header so the HTTP proxy knows the real client IP
+    let server_addr: SocketAddr = MITM_LISTEN_ADDR.parse().unwrap();
+    super::proxy_protocol::write_proxy_header(&mut proxy_stream, client_addr, server_addr).await?;
 
     // Bidirectional copy between TLS stream and HTTP proxy
     let (mut tls_read, mut tls_write) = tokio::io::split(tls_stream);

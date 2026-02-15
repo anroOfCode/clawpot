@@ -111,13 +111,13 @@ pub async fn run(
     let mut cancel2 = cancel.clone();
 
     let http_task = tokio::spawn(async move {
-        if let Err(e) = run_listener(http_listener, http_ctx, &mut cancel).await {
+        if let Err(e) = run_listener(http_listener, http_ctx, &mut cancel, false).await {
             error!("HTTP proxy listener failed: {:#}", e);
         }
     });
 
     let https_task = tokio::spawn(async move {
-        if let Err(e) = run_listener(https_listener, https_ctx, &mut cancel2).await {
+        if let Err(e) = run_listener(https_listener, https_ctx, &mut cancel2, true).await {
             error!("HTTPS proxy listener failed: {:#}", e);
         }
     });
@@ -131,6 +131,7 @@ async fn run_listener(
     listener: TcpListener,
     ctx: Arc<ProxyCtx>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
+    proxy_protocol: bool,
 ) -> Result<()> {
     loop {
         tokio::select! {
@@ -138,21 +139,7 @@ async fn run_listener(
                 let (stream, peer_addr) = result.context("Failed to accept connection")?;
                 let ctx = ctx.clone();
                 tokio::spawn(async move {
-                    let io = hyper_util::rt::TokioIo::new(stream);
-                    let service = service_fn(move |req| {
-                        let ctx = ctx.clone();
-                        async move { handle_request(req, peer_addr, ctx).await }
-                    });
-                    if let Err(e) = http1::Builder::new()
-                        .preserve_header_case(true)
-                        .keep_alive(false)
-                        .serve_connection(io, service)
-                        .await
-                    {
-                        if !e.to_string().contains("connection closed") {
-                            warn!("HTTP connection from {} error: {}", peer_addr, e);
-                        }
-                    }
+                    serve_connection(stream, peer_addr, ctx, proxy_protocol).await;
                 });
             }
             _ = cancel.changed() => {
@@ -163,6 +150,43 @@ async fn run_listener(
     }
 
     Ok(())
+}
+
+async fn serve_connection(
+    mut stream: tokio::net::TcpStream,
+    peer_addr: SocketAddr,
+    ctx: Arc<ProxyCtx>,
+    proxy_protocol: bool,
+) {
+    // If this is the HTTPS listener (port 10081), read the PROXY protocol
+    // header sent by the TLS MITM to recover the real client IP.
+    let effective_addr = if proxy_protocol {
+        match super::proxy_protocol::read_proxy_header(&mut stream).await {
+            Ok(ip) => SocketAddr::new(ip, peer_addr.port()),
+            Err(e) => {
+                warn!("Failed to read PROXY header from {}: {:#}", peer_addr, e);
+                return;
+            }
+        }
+    } else {
+        peer_addr
+    };
+
+    let io = hyper_util::rt::TokioIo::new(stream);
+    let service = service_fn(move |req| {
+        let ctx = ctx.clone();
+        async move { handle_request(req, effective_addr, ctx).await }
+    });
+    if let Err(e) = http1::Builder::new()
+        .preserve_header_case(true)
+        .keep_alive(false)
+        .serve_connection(io, service)
+        .await
+    {
+        if !e.to_string().contains("connection closed") {
+            warn!("HTTP connection from {} error: {}", effective_addr, e);
+        }
+    }
 }
 
 async fn handle_request(
@@ -190,12 +214,17 @@ async fn handle_request_inner(
     let start = Instant::now();
     let corr_id = Uuid::new_v4().to_string();
 
-    // 1. Resolve vm_id from source IP
-    let vm_id = ctx
-        .registry
-        .find_by_ip(peer_addr.ip())
-        .await
-        .map_or_else(|| "unknown".to_string(), |id| id.to_string());
+    // 1. Resolve vm_id from source IP — block unknown sources
+    let vm_id = if let Some(id) = ctx.registry.find_by_ip(peer_addr.ip()).await { id.to_string() } else {
+        warn!(
+            "Blocking HTTP request from unknown source IP: {}",
+            peer_addr.ip()
+        );
+        return Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Full::new(Bytes::from("Unknown VM")))
+            .unwrap());
+    };
 
     // 2. Extract request metadata
     let method = req.method().to_string();

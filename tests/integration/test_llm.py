@@ -247,14 +247,10 @@ class TestLlm:
         # Small delay to ensure async events are flushed
         time.sleep(0.5)
 
-        # Note: HTTPS requests go through the TLS MITM proxy, which connects
-        # to the HTTP proxy from localhost. This means the HTTP proxy sees
-        # peer_addr=127.0.0.1 and cannot resolve the VM ID. So llm.* events
-        # have vm_id="unknown". We query by category instead.
-        requests = query_events(event_type="llm.request")
+        requests = query_events(event_type="llm.request", vm_id=_vm_id)
         assert len(requests) >= 2, f"Expected at least 2 llm.request events, got {len(requests)}"
 
-        responses = query_events(event_type="llm.response")
+        responses = query_events(event_type="llm.response", vm_id=_vm_id)
         assert len(responses) >= 2, f"Expected at least 2 llm.response events, got {len(responses)}"
 
         # Verify non-streaming request event fields
@@ -321,8 +317,7 @@ class TestLlm:
         assert _non_streaming_corr_id is not None, "No correlation ID captured"
 
         # The llm.request and network.http.request should share a correlation_id
-        # (vm_id is "unknown" for HTTPS, so query all events)
-        all_events = query_events()
+        all_events = query_events(vm_id=_vm_id)
         corr_events = [e for e in all_events if e["correlation_id"] == _non_streaming_corr_id]
 
         event_types = {e["event_type"] for e in corr_events}
