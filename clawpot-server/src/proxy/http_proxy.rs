@@ -130,6 +130,7 @@ async fn run_listener(
                     });
                     if let Err(e) = http1::Builder::new()
                         .preserve_header_case(true)
+                        .keep_alive(false)
                         .serve_connection(io, service)
                         .await
                     {
