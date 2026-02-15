@@ -33,11 +33,41 @@ SSH_KEY = f"{DEV_DIR}/ssh/id_ed25519"
 SSH_PUBKEY = f"{DEV_DIR}/ssh/id_ed25519.pub"
 
 # Runtime state (per-VM instance, destroyed with VM)
-VM_DIR = "/tmp/devvm"
-OVERLAY_IMG = f"{VM_DIR}/overlay.qcow2"
-CONN_ENV = f"{VM_DIR}/connection.env"
-PID_FILE = f"{VM_DIR}/qemu.pid"
-CONSOLE_LOG = f"{VM_DIR}/console.log"
+# Each worktree gets its own VM with a unique ID stored in .devvm at the project root.
+# Runtime files live under /tmp/devvm-<id>/.
+
+
+def vm_dir(vm_id):
+    """Return the runtime directory for a given VM ID."""
+    return f"/tmp/devvm-{vm_id}"
+
+
+def devvm_file():
+    """Return the path to the .devvm file at the project root."""
+    return os.path.join(project_root(), ".devvm")
+
+
+def load_vm_id():
+    """Read the VM ID from .devvm, or return None if it doesn't exist."""
+    path = devvm_file()
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        vm_id = f.read().strip()
+    return vm_id if vm_id else None
+
+
+def save_vm_id(vm_id):
+    """Write the VM ID to .devvm, chowned to SUDO_USER if running under sudo."""
+    path = devvm_file()
+    with open(path, "w") as f:
+        f.write(vm_id + "\n")
+    real_user = os.environ.get("SUDO_USER")
+    if real_user:
+        import pwd
+        pw = pwd.getpwnam(real_user)
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+
 
 BASE_IMG_URL = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
 FIRECRACKER_VERSION = "v1.9.1"
@@ -83,12 +113,17 @@ def project_root():
     sys.exit(1)
 
 
-def load_connection():
+def load_connection(vm_id=None):
     """Load connection.env and return dict, or None if not running."""
-    if not os.path.exists(CONN_ENV):
+    if vm_id is None:
+        vm_id = load_vm_id()
+    if vm_id is None:
+        return None
+    conn_env = os.path.join(vm_dir(vm_id), "connection.env")
+    if not os.path.exists(conn_env):
         return None
     conn = {}
-    with open(CONN_ENV) as f:
+    with open(conn_env) as f:
         for line in f:
             line = line.strip()
             if "=" in line and not line.startswith("#"):
@@ -293,10 +328,13 @@ def cmd_launch(args):
         error("launch requires root (for KVM access). Run with sudo.")
         sys.exit(1)
 
-    conn = load_connection()
-    if conn is not None:
-        error("Dev VM is already running. Use 'destroy' first or 'status' to check.")
-        sys.exit(1)
+    # Check if this worktree already has a running VM
+    existing_id = load_vm_id()
+    if existing_id is not None:
+        conn = load_connection(existing_id)
+        if conn is not None:
+            error("Dev VM is already running. Use 'destroy' first or 'status' to check.")
+            sys.exit(1)
 
     # Bootstrap prerequisites
     ensure_dev_dir()
@@ -306,35 +344,43 @@ def cmd_launch(args):
     if args.rebuild or not os.path.exists(GOLDEN_IMG):
         build_golden_image()
 
+    # Generate a unique VM ID for this worktree
+    vm_id = os.urandom(4).hex()
+    vdir = vm_dir(vm_id)
+    overlay_img = os.path.join(vdir, "overlay.qcow2")
+    conn_env = os.path.join(vdir, "connection.env")
+    pid_file = os.path.join(vdir, "qemu.pid")
+    console_log = os.path.join(vdir, "console.log")
+
     # Create runtime directory (world-readable so non-root commands work)
-    if os.path.exists(VM_DIR):
-        shutil.rmtree(VM_DIR)
-    os.makedirs(VM_DIR, mode=0o755)
+    if os.path.exists(vdir):
+        shutil.rmtree(vdir)
+    os.makedirs(vdir, mode=0o755)
 
     # Create COW overlay
     info("Creating COW overlay...")
     run(["qemu-img", "create", "-b", GOLDEN_IMG, "-F", "qcow2",
-         "-f", "qcow2", OVERLAY_IMG])
+         "-f", "qcow2", overlay_img])
 
     # Pick random SSH port
     ssh_port = random.randint(10000, 60000)
 
     # Launch QEMU
-    info(f"Launching dev VM (SSH port {ssh_port})...")
+    info(f"Launching dev VM {vm_id} (SSH port {ssh_port})...")
     run([
         "qemu-system-x86_64",
         "-m", "4096", "-smp", "2",
         "-cpu", "host", "-enable-kvm",
-        "-drive", f"file={OVERLAY_IMG},format=qcow2,if=virtio",
+        "-drive", f"file={overlay_img},format=qcow2,if=virtio",
         "-netdev", f"user,id=net0,hostfwd=tcp::{ssh_port}-:22",
         "-device", "virtio-net-pci,netdev=net0",
         "-display", "none",
-        "-serial", f"file:{CONSOLE_LOG}",
-        "-pidfile", PID_FILE,
+        "-serial", f"file:{console_log}",
+        "-pidfile", pid_file,
         "-daemonize",
     ])
 
-    qemu_pid = open(PID_FILE).read().strip()
+    qemu_pid = open(pid_file).read().strip()
     info(f"QEMU started (PID {qemu_pid})")
 
     # Wait for SSH
@@ -356,40 +402,51 @@ def cmd_launch(args):
 
     if elapsed >= max_wait:
         error(f"SSH did not become available within {max_wait}s")
-        error(f"Check console log: {CONSOLE_LOG}")
+        error(f"Check console log: {console_log}")
         sys.exit(1)
 
     # Write connection env
-    with open(CONN_ENV, "w") as f:
+    with open(conn_env, "w") as f:
         f.write(f"DEVVM_SSH_PORT={ssh_port}\n")
         f.write(f"DEVVM_SSH_KEY={SSH_KEY}\n")
         f.write(f"DEVVM_SSH_USER={SSH_USER}\n")
         f.write(f"DEVVM_SSH_HOST=localhost\n")
         f.write(f"DEVVM_PID={qemu_pid}\n")
-        f.write(f"DEVVM_DIR={VM_DIR}\n")
+        f.write(f"DEVVM_DIR={vdir}\n")
 
     # Make runtime files readable by non-root users
-    for f in [CONN_ENV, CONSOLE_LOG, PID_FILE]:
+    for f in [conn_env, console_log, pid_file]:
         if os.path.exists(f):
             os.chmod(f, 0o644)
 
+    # Persist VM ID for this worktree
+    save_vm_id(vm_id)
+
     info("Dev VM is ready!")
+    info(f"  VM ID: {vm_id}")
     info(f"  SSH: ssh -i {SSH_KEY} -p {ssh_port} {SSH_USER}@localhost")
     info(f"  Or:  python utils/devvm.py ssh")
 
 
 def cmd_destroy(args):
-    conn = load_connection()
+    vm_id = load_vm_id()
+    if vm_id is None:
+        warn("No dev VM associated with this worktree")
+        return
+
+    vdir = vm_dir(vm_id)
+    conn = load_connection(vm_id)
     if conn is None:
         warn("No running dev VM found")
         # Clean up stale runtime dir if it exists
-        if os.path.exists(VM_DIR):
-            shutil.rmtree(VM_DIR)
-            info(f"Cleaned up stale {VM_DIR}")
+        if os.path.exists(vdir):
+            shutil.rmtree(vdir)
+            info(f"Cleaned up stale {vdir}")
+        os.remove(devvm_file())
         return
 
     pid = int(conn["DEVVM_PID"])
-    info(f"Destroying dev VM (PID {pid})...")
+    info(f"Destroying dev VM {vm_id} (PID {pid})...")
 
     try:
         os.kill(pid, signal.SIGTERM)
@@ -404,29 +461,40 @@ def cmd_destroy(args):
     except OSError:
         info("QEMU process already stopped")
 
-    if os.path.exists(VM_DIR):
-        shutil.rmtree(VM_DIR)
-        info(f"Cleaned up {VM_DIR}")
+    if os.path.exists(vdir):
+        shutil.rmtree(vdir)
+        info(f"Cleaned up {vdir}")
 
+    os.remove(devvm_file())
     info("Dev VM destroyed")
 
 
 def cmd_status(args):
-    conn = load_connection()
+    vm_id = load_vm_id()
+    if vm_id is None:
+        print("No dev VM associated with this worktree")
+        return
+
+    conn = load_connection(vm_id)
     if conn is None:
-        print("No dev VM running")
+        print(f"Dev VM {vm_id} is not running (stale .devvm file?)")
         return
 
     print(f"Dev VM is running")
+    print(f"  VM ID:    {vm_id}")
     print(f"  PID:      {conn['DEVVM_PID']}")
     print(f"  SSH port: {conn['DEVVM_SSH_PORT']}")
     print(f"  SSH cmd:  ssh -i {SSH_KEY} -p {conn['DEVVM_SSH_PORT']} {SSH_USER}@localhost")
 
 
 def cmd_sync(args):
-    conn = load_connection()
+    vm_id = load_vm_id()
+    if vm_id is None:
+        error("No dev VM associated with this worktree. Run 'launch' first.")
+        sys.exit(1)
+    conn = load_connection(vm_id)
     if conn is None:
-        error("No running dev VM. Run 'launch' first.")
+        error("Dev VM is not running. Run 'launch' first.")
         sys.exit(1)
 
     root = project_root()
@@ -448,9 +516,13 @@ def cmd_sync(args):
 
 
 def cmd_ssh(args):
-    conn = load_connection()
+    vm_id = load_vm_id()
+    if vm_id is None:
+        error("No dev VM associated with this worktree. Run 'launch' first.")
+        sys.exit(1)
+    conn = load_connection(vm_id)
     if conn is None:
-        error("No running dev VM. Run 'launch' first.")
+        error("Dev VM is not running. Run 'launch' first.")
         sys.exit(1)
 
     cmd = ssh_cmd(conn, ["-t"])
@@ -458,9 +530,13 @@ def cmd_ssh(args):
 
 
 def cmd_run(args):
-    conn = load_connection()
+    vm_id = load_vm_id()
+    if vm_id is None:
+        error("No dev VM associated with this worktree. Run 'launch' first.")
+        sys.exit(1)
+    conn = load_connection(vm_id)
     if conn is None:
-        error("No running dev VM. Run 'launch' first.")
+        error("Dev VM is not running. Run 'launch' first.")
         sys.exit(1)
 
     cmd = ssh_cmd(conn)
