@@ -8,11 +8,7 @@ use tracing::info;
 /// Assigns the gateway IP and brings it up
 pub async fn ensure_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Result<()> {
     // Check if bridge already exists
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(name.to_string())
-        .execute();
+    let mut links = handle.link().get().match_name(name.to_string()).execute();
 
     if links.try_next().await.is_ok() {
         info!("Bridge {} already exists", name);
@@ -39,14 +35,14 @@ async fn create_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Resul
         .add(LinkBridge::new(name).build())
         .execute()
         .await
-        .context(format!("Failed to create bridge {}", name))?;
+        .context(format!("Failed to create bridge {name}"))?;
 
     info!("Created bridge: {}", name);
 
     // Get bridge index for subsequent operations
     let index = get_link_index(handle, name)
         .await
-        .context(format!("Failed to get index for bridge {}", name))?;
+        .context(format!("Failed to get index for bridge {name}"))?;
 
     // Assign IP to bridge
     handle
@@ -55,8 +51,7 @@ async fn create_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Resul
         .execute()
         .await
         .context(format!(
-            "Failed to assign IP {}/24 to bridge {}",
-            gateway_ip, name
+            "Failed to assign IP {gateway_ip}/24 to bridge {name}"
         ))?;
 
     info!("Assigned IP {}/24 to bridge {}", gateway_ip, name);
@@ -67,7 +62,7 @@ async fn create_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> Resul
         .set(LinkUnspec::new_with_index(index).up().build())
         .execute()
         .await
-        .context(format!("Failed to bring up bridge {}", name))?;
+        .context(format!("Failed to bring up bridge {name}"))?;
 
     info!("Brought up bridge: {}", name);
 
@@ -99,12 +94,11 @@ fn enable_ip_forwarding() -> Result<()> {
                 Ok(())
             } else {
                 Err(anyhow::anyhow!(
-                    "IP forwarding is disabled and cannot be enabled: {}",
-                    e
+                    "IP forwarding is disabled and cannot be enabled: {e}"
                 ))
             }
         }
-        Err(e) => Err(anyhow::anyhow!("Failed to enable IP forwarding: {}", e)),
+        Err(e) => Err(anyhow::anyhow!("Failed to enable IP forwarding: {e}")),
     }
 }
 
@@ -112,11 +106,11 @@ fn enable_ip_forwarding() -> Result<()> {
 pub async fn attach_tap_to_bridge(handle: &Handle, bridge: &str, tap: &str) -> Result<()> {
     let bridge_index = get_link_index(handle, bridge)
         .await
-        .context(format!("Failed to get index for bridge {}", bridge))?;
+        .context(format!("Failed to get index for bridge {bridge}"))?;
 
     let tap_index = get_link_index(handle, tap)
         .await
-        .context(format!("Failed to get index for TAP {}", tap))?;
+        .context(format!("Failed to get index for TAP {tap}"))?;
 
     handle
         .link()
@@ -127,10 +121,7 @@ pub async fn attach_tap_to_bridge(handle: &Handle, bridge: &str, tap: &str) -> R
         )
         .execute()
         .await
-        .context(format!(
-            "Failed to attach TAP {} to bridge {}",
-            tap, bridge
-        ))?;
+        .context(format!("Failed to attach TAP {tap} to bridge {bridge}"))?;
 
     info!("Attached TAP device {} to bridge {}", tap, bridge);
     Ok(())
@@ -138,17 +129,13 @@ pub async fn attach_tap_to_bridge(handle: &Handle, bridge: &str, tap: &str) -> R
 
 /// Get the interface index for a named link
 pub async fn get_link_index(handle: &Handle, name: &str) -> Result<u32> {
-    let mut links = handle
-        .link()
-        .get()
-        .match_name(name.to_string())
-        .execute();
+    let mut links = handle.link().get().match_name(name.to_string()).execute();
 
     let link = links
         .try_next()
         .await
-        .context(format!("Failed to query link {}", name))?
-        .ok_or_else(|| anyhow::anyhow!("Link {} not found", name))?;
+        .context(format!("Failed to query link {name}"))?
+        .ok_or_else(|| anyhow::anyhow!("Link {name} not found"))?;
 
     Ok(link.header.index)
 }

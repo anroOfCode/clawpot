@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use clawpot_common::proto::{clawpot_service_client::ClawpotServiceClient, ExecVmRequest};
+use std::collections::HashMap;
 use std::io::Write;
 use tonic::transport::Channel;
 
@@ -17,7 +18,7 @@ pub async fn execute(
         vm_id,
         command: cmd,
         args,
-        env: Default::default(),
+        env: HashMap::new(),
         working_dir: String::new(),
     };
 

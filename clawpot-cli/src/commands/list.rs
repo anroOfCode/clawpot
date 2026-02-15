@@ -1,5 +1,7 @@
 use anyhow::Result;
-use clawpot_common::proto::{clawpot_service_client::ClawpotServiceClient, ListVmsRequest, VmState};
+use clawpot_common::proto::{
+    clawpot_service_client::ClawpotServiceClient, ListVmsRequest, VmState,
+};
 use tabled::{Table, Tabled};
 use tonic::transport::Channel;
 
@@ -53,8 +55,8 @@ pub async fn execute(client: &mut ClawpotServiceClient<Channel>) -> Result<()> {
 
     let count = rows.len();
     let table = Table::new(rows).to_string();
-    println!("{}", table);
-    println!("\nTotal: {} VM(s)", count);
+    println!("{table}");
+    println!("\nTotal: {count} VM(s)");
 
     Ok(())
 }

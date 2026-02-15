@@ -1,4 +1,4 @@
-use crate::proto::{ExecStreamInput, ExecStreamOutput, exec_stream_input, exec_stream_output};
+use crate::proto::{exec_stream_input, exec_stream_output, ExecStreamInput, ExecStreamOutput};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
@@ -7,15 +7,17 @@ use tracing::{debug, error, info};
 
 const CHUNK_SIZE: usize = 4096;
 
+#[allow(clippy::too_many_lines)]
 pub async fn run_stream(
     mut input_stream: tonic::Streaming<ExecStreamInput>,
     tx: mpsc::Sender<Result<ExecStreamOutput, Status>>,
 ) {
     // First message must be a start command
     let start_req = match input_stream.message().await {
-        Ok(Some(msg)) => match msg.input {
-            Some(exec_stream_input::Input::Start(req)) => req,
-            _ => {
+        Ok(Some(msg)) => {
+            if let Some(exec_stream_input::Input::Start(req)) = msg.input {
+                req
+            } else {
                 let _ = tx
                     .send(Err(Status::invalid_argument(
                         "First message must be a start command",
@@ -23,7 +25,7 @@ pub async fn run_stream(
                     .await;
                 return;
             }
-        },
+        }
         Ok(None) => return,
         Err(e) => {
             let _ = tx.send(Err(e)).await;
@@ -53,8 +55,7 @@ pub async fn run_stream(
         Err(e) => {
             let _ = tx
                 .send(Err(Status::internal(format!(
-                    "Failed to spawn process: {}",
-                    e
+                    "Failed to spawn process: {e}"
                 ))))
                 .await;
             return;
@@ -94,18 +95,15 @@ pub async fn run_stream(
         let mut buf = vec![0u8; CHUNK_SIZE];
         loop {
             match child_stdout.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
+                Ok(n) if n > 0 => {
                     let msg = ExecStreamOutput {
-                        output: Some(exec_stream_output::Output::StdoutData(
-                            buf[..n].to_vec(),
-                        )),
+                        output: Some(exec_stream_output::Output::StdoutData(buf[..n].to_vec())),
                     };
                     if tx_stdout.send(Ok(msg)).await.is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Ok(_) | Err(_) => break,
             }
         }
     });
@@ -116,18 +114,15 @@ pub async fn run_stream(
         let mut buf = vec![0u8; CHUNK_SIZE];
         loop {
             match child_stderr.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
+                Ok(n) if n > 0 => {
                     let msg = ExecStreamOutput {
-                        output: Some(exec_stream_output::Output::StderrData(
-                            buf[..n].to_vec(),
-                        )),
+                        output: Some(exec_stream_output::Output::StderrData(buf[..n].to_vec())),
                     };
                     if tx_stderr.send(Ok(msg)).await.is_err() {
                         break;
                     }
                 }
-                Err(_) => break,
+                Ok(_) | Err(_) => break,
             }
         }
     });

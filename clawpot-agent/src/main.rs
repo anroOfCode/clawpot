@@ -2,6 +2,7 @@ mod exec;
 mod service;
 mod stream;
 
+#[allow(clippy::all, clippy::pedantic)]
 pub mod proto {
     tonic::include_proto!("clawpot.agent.v1");
 }

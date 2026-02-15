@@ -1,4 +1,7 @@
-use crate::firecracker::models::*;
+use crate::firecracker::models::{
+    BootSource, Drive, EntropyDevice, ErrorResponse, InstanceActionInfo, InstanceInfo,
+    MachineConfig, NetworkInterface, VsockDevice,
+};
 use anyhow::{anyhow, Context, Result};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
@@ -75,11 +78,7 @@ impl FirecrackerClient {
                 ));
             }
 
-            return Err(anyhow!(
-                "Request failed with status {}: {}",
-                status,
-                error_text
-            ));
+            return Err(anyhow!("Request failed with status {status}: {error_text}"));
         }
 
         Ok(())
@@ -122,11 +121,7 @@ impl FirecrackerClient {
                 ));
             }
 
-            return Err(anyhow!(
-                "Request failed with status {}: {}",
-                status,
-                error_text
-            ));
+            return Err(anyhow!("Request failed with status {status}: {error_text}"));
         }
 
         serde_json::from_slice(&body_bytes).context("Failed to deserialize response")
@@ -142,9 +137,7 @@ impl FirecrackerClient {
     /// Set a drive configuration
     pub async fn set_drive(&self, drive: Drive) -> Result<()> {
         let path = format!("/drives/{}", drive.drive_id);
-        self.put(&path, &drive)
-            .await
-            .context("Failed to set drive")
+        self.put(&path, &drive).await.context("Failed to set drive")
     }
 
     /// Set the machine configuration (CPU and memory)
@@ -172,9 +165,7 @@ impl FirecrackerClient {
 
     /// Get instance information
     pub async fn get_instance_info(&self) -> Result<InstanceInfo> {
-        self.get("/")
-            .await
-            .context("Failed to get instance info")
+        self.get("/").await.context("Failed to get instance info")
     }
 
     /// Set a network interface configuration

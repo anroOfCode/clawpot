@@ -45,18 +45,21 @@ impl VmConfig {
     }
 
     /// Set the number of virtual CPUs
+    #[must_use]
     pub fn with_vcpus(mut self, count: u8) -> Self {
         self.vcpu_count = count;
         self
     }
 
     /// Set the memory size in MiB
+    #[must_use]
     pub fn with_memory(mut self, mib: u32) -> Self {
         self.mem_size_mib = mib;
         self
     }
 
     /// Set custom boot arguments
+    #[must_use]
     pub fn with_boot_args(mut self, args: String) -> Self {
         self.boot_args = args;
         self
@@ -64,19 +67,21 @@ impl VmConfig {
 
     /// Configure networking with TAP device and IP address
     /// Automatically updates boot args to include IP configuration
+    #[must_use]
     pub fn with_network(mut self, tap_device: String, ip_address: String) -> Self {
         self.tap_device = Some(tap_device);
-        self.ip_address = Some(ip_address.clone());
 
         // Update boot args to include IP configuration
         // Format: ip=<client-ip>::<gw-ip>:<netmask>::<device>:<autoconf>
-        let ip_config = format!("ip={}::192.168.100.1:255.255.255.0::eth0:off", ip_address);
-        self.boot_args = format!("console=ttyS0 reboot=k panic=1 pci=off {}", ip_config);
+        let ip_config = format!("ip={ip_address}::192.168.100.1:255.255.255.0::eth0:off");
+        self.boot_args = format!("console=ttyS0 reboot=k panic=1 pci=off {ip_config}");
+        self.ip_address = Some(ip_address);
 
         self
     }
 
     /// Configure vsock device for guest-host communication
+    #[must_use]
     pub fn with_vsock(mut self, guest_cid: u32, uds_path: String) -> Self {
         self.guest_cid = Some(guest_cid);
         self.vsock_uds_path = Some(uds_path);
@@ -121,10 +126,7 @@ mod tests {
 
     #[test]
     fn test_default_config() {
-        let config = VmConfig::new(
-            PathBuf::from("/tmp/kernel"),
-            PathBuf::from("/tmp/rootfs"),
-        );
+        let config = VmConfig::new(PathBuf::from("/tmp/kernel"), PathBuf::from("/tmp/rootfs"));
 
         assert_eq!(config.vcpu_count, 1);
         assert_eq!(config.mem_size_mib, 256);
@@ -133,12 +135,9 @@ mod tests {
 
     #[test]
     fn test_builder_pattern() {
-        let config = VmConfig::new(
-            PathBuf::from("/tmp/kernel"),
-            PathBuf::from("/tmp/rootfs"),
-        )
-        .with_vcpus(4)
-        .with_memory(1024);
+        let config = VmConfig::new(PathBuf::from("/tmp/kernel"), PathBuf::from("/tmp/rootfs"))
+            .with_vcpus(4)
+            .with_memory(1024);
 
         assert_eq!(config.vcpu_count, 4);
         assert_eq!(config.mem_size_mib, 1024);

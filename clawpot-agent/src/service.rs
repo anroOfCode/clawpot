@@ -24,16 +24,13 @@ impl AgentServiceImpl {
 
 #[tonic::async_trait]
 impl AgentService for AgentServiceImpl {
-    async fn exec(
-        &self,
-        request: Request<ExecRequest>,
-    ) -> Result<Response<ExecResponse>, Status> {
+    async fn exec(&self, request: Request<ExecRequest>) -> Result<Response<ExecResponse>, Status> {
         let req = request.into_inner();
         info!("Exec: {} {:?}", req.command, req.args);
 
         let response = exec::run_command(req)
             .await
-            .map_err(|e| Status::internal(format!("Execution failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("Execution failed: {e}")))?;
 
         Ok(Response::new(response))
     }

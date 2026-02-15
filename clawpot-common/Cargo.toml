@@ -3,6 +3,9 @@ name = "clawpot-common"
 version = "0.1.0"
 edition = "2021"
 
+[lints]
+workspace = true
+
 [dependencies]
 hyper = { version = "1.0", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }

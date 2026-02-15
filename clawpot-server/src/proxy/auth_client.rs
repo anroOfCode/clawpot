@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clawpot_common::network_auth_proto::{
-    network_authorization_request, network_authorization_service_client::NetworkAuthorizationServiceClient,
-    DnsRequest, HttpRequest, NetworkAuthorizationRequest,
+    network_authorization_request,
+    network_authorization_service_client::NetworkAuthorizationServiceClient, DnsRequest,
+    HttpRequest, NetworkAuthorizationRequest,
 };
 use tonic::transport::Channel;
 use tracing::{info, warn};
@@ -18,18 +19,15 @@ pub enum AuthClient {
 impl AuthClient {
     /// Connect to the authorization service, or disable if addr is None.
     pub async fn new(addr: Option<&str>) -> Result<Self> {
-        match addr {
-            Some(addr) => {
-                let client = NetworkAuthorizationServiceClient::connect(addr.to_string())
-                    .await
-                    .with_context(|| format!("Failed to connect to auth service at {}", addr))?;
-                info!("Connected to authorization service at {}", addr);
-                Ok(AuthClient::Connected(client))
-            }
-            None => {
-                info!("No CLAWPOT_AUTH_ADDR set, authorization disabled (allow-all)");
-                Ok(AuthClient::Disabled)
-            }
+        if let Some(addr) = addr {
+            let client = NetworkAuthorizationServiceClient::connect(addr.to_string())
+                .await
+                .with_context(|| format!("Failed to connect to auth service at {addr}"))?;
+            info!("Connected to authorization service at {}", addr);
+            Ok(AuthClient::Connected(client))
+        } else {
+            info!("No CLAWPOT_AUTH_ADDR set, authorization disabled (allow-all)");
+            Ok(AuthClient::Disabled)
         }
     }
 
@@ -74,7 +72,7 @@ impl AuthClient {
                     }
                     Err(e) => {
                         warn!("Auth service call failed (denying): {}", e);
-                        Ok((false, format!("auth service unreachable: {}", e)))
+                        Ok((false, format!("auth service unreachable: {e}")))
                     }
                 }
             }
@@ -110,7 +108,7 @@ impl AuthClient {
                     }
                     Err(e) => {
                         warn!("Auth service call failed (denying): {}", e);
-                        Ok((false, format!("auth service unreachable: {}", e)))
+                        Ok((false, format!("auth service unreachable: {e}")))
                     }
                 }
             }

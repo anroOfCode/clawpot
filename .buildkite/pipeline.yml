@@ -2,6 +2,11 @@ agents:
   queue: "clawpot"
 
 steps:
+  - label: ":lint-roller: Lint"
+    key: "lint"
+    command: .buildkite/scripts/lint.sh
+    timeout_in_minutes: 10
+
   - label: ":rust: Build & Unit Tests"
     key: "build"
     command: .buildkite/scripts/build.sh

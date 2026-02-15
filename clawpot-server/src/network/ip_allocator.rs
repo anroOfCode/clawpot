@@ -5,11 +5,12 @@ use std::net::{IpAddr, Ipv4Addr};
 /// IP address allocator for the 192.168.100.0/24 network
 /// Gateway is at 192.168.100.1
 /// Allocatable range: 192.168.100.2-254 (253 addresses)
+#[allow(dead_code)]
 pub struct IpAllocator {
-    network_base: u32,      // 192.168.100.0 as u32
-    gateway: Ipv4Addr,      // 192.168.100.1
-    allocated: BitVec,      // Bitmap of allocated IPs
-    next_index: usize,       // Hint for next allocation (round-robin)
+    network_base: u32, // 192.168.100.0 as u32
+    gateway: Ipv4Addr, // 192.168.100.1
+    allocated: BitVec, // Bitmap of allocated IPs
+    next_index: usize, // Hint for next allocation (round-robin)
 }
 
 impl IpAllocator {
@@ -69,8 +70,7 @@ impl IpAllocator {
         // Check if IP is in our network range
         if ip_u32 < self.network_base + 2 || ip_u32 > self.network_base + 254 {
             return Err(anyhow!(
-                "IP address {} is not in the allocatable range (192.168.100.2-254)",
-                ipv4
+                "IP address {ipv4} is not in the allocatable range (192.168.100.2-254)"
             ));
         }
 
@@ -78,7 +78,7 @@ impl IpAllocator {
         let index = (ip_u32 - self.network_base - 2) as usize;
 
         if index >= self.allocated.len() {
-            return Err(anyhow!("IP address {} is out of range", ipv4));
+            return Err(anyhow!("IP address {ipv4} is out of range"));
         }
 
         // Mark as unallocated
@@ -88,16 +88,19 @@ impl IpAllocator {
     }
 
     /// Get the gateway IP address
+    #[allow(dead_code)]
     pub fn gateway(&self) -> IpAddr {
         IpAddr::V4(self.gateway)
     }
 
     /// Get the number of allocated IPs
+    #[allow(dead_code)]
     pub fn allocated_count(&self) -> usize {
         self.allocated.count_ones()
     }
 
     /// Get the number of available IPs
+    #[allow(dead_code)]
     pub fn available_count(&self) -> usize {
         self.allocated.len() - self.allocated_count()
     }
@@ -146,7 +149,7 @@ mod tests {
 
         // Allocate again - should get a different IP (round-robin)
         let ip3 = allocator.allocate().unwrap();
-        assert_ne!(ip3, ip1);  // Round-robin, so we get the next available
+        assert_ne!(ip3, ip1); // Round-robin, so we get the next available
     }
 
     #[test]
@@ -170,19 +173,22 @@ mod tests {
         let mut allocator = IpAllocator::new();
 
         // Try to release IP outside range
-        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)));  // Gateway
+        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1))); // Gateway
         assert!(result.is_err());
 
-        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 255)));  // Broadcast
+        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(192, 168, 100, 255))); // Broadcast
         assert!(result.is_err());
 
-        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));  // Different network
+        let result = allocator.release(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))); // Different network
         assert!(result.is_err());
     }
 
     #[test]
     fn test_gateway() {
         let allocator = IpAllocator::new();
-        assert_eq!(allocator.gateway(), IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1)));
+        assert_eq!(
+            allocator.gateway(),
+            IpAddr::V4(Ipv4Addr::new(192, 168, 100, 1))
+        );
     }
 }

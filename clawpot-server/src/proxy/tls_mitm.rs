@@ -31,7 +31,7 @@ async fn run_inner(
 ) -> Result<()> {
     let listener = TcpListener::bind(MITM_LISTEN_ADDR)
         .await
-        .with_context(|| format!("Failed to bind TLS MITM proxy on {}", MITM_LISTEN_ADDR))?;
+        .with_context(|| format!("Failed to bind TLS MITM proxy on {MITM_LISTEN_ADDR}"))?;
 
     info!("TLS MITM proxy listening on {}", MITM_LISTEN_ADDR);
 
@@ -62,7 +62,10 @@ async fn run_inner(
 async fn handle_connection(stream: TcpStream, ca: Arc<CertificateAuthority>) -> Result<()> {
     // Peek at the TLS ClientHello to extract SNI
     let mut buf = vec![0u8; 4096];
-    let n = stream.peek(&mut buf).await.context("Failed to peek at TLS ClientHello")?;
+    let n = stream
+        .peek(&mut buf)
+        .await
+        .context("Failed to peek at TLS ClientHello")?;
     let sni = extract_sni(&buf[..n]).unwrap_or_default();
 
     if sni.is_empty() {
@@ -70,20 +73,25 @@ async fn handle_connection(stream: TcpStream, ca: Arc<CertificateAuthority>) -> 
     }
 
     // Generate a leaf cert for this domain
-    let leaf = ca.get_or_create_cert(&sni).await
-        .with_context(|| format!("Failed to generate cert for {}", sni))?;
+    let leaf = ca
+        .get_or_create_cert(&sni)
+        .await
+        .with_context(|| format!("Failed to generate cert for {sni}"))?;
 
     // Build rustls server config with the leaf cert
     let tls_config = build_server_config(&leaf.cert_pem, &leaf.key_pem, ca.ca_cert_pem())
-        .with_context(|| format!("Failed to build TLS config for {}", sni))?;
+        .with_context(|| format!("Failed to build TLS config for {sni}"))?;
 
     let acceptor = TlsAcceptor::from(Arc::new(tls_config));
-    let tls_stream = acceptor.accept(stream).await
+    let tls_stream = acceptor
+        .accept(stream)
+        .await
         .context("TLS handshake failed")?;
 
     // Connect to HTTP proxy's TLS-upstream listener
-    let proxy_stream = TcpStream::connect(HTTP_PROXY_TLS_ADDR).await
-        .with_context(|| format!("Failed to connect to HTTP proxy at {}", HTTP_PROXY_TLS_ADDR))?;
+    let proxy_stream = TcpStream::connect(HTTP_PROXY_TLS_ADDR)
+        .await
+        .with_context(|| format!("Failed to connect to HTTP proxy at {HTTP_PROXY_TLS_ADDR}"))?;
 
     // Bidirectional copy between TLS stream and HTTP proxy
     let (mut tls_read, mut tls_write) = tokio::io::split(tls_stream);

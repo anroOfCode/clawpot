@@ -8,7 +8,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Client for communicating with the guest agent over vsock
 pub struct AgentClient {
@@ -35,7 +35,7 @@ impl AgentClient {
                     let mut stream = UnixStream::connect(&path).await?;
 
                     // Perform the CONNECT handshake
-                    let connect_cmd = format!("CONNECT {}\n", AGENT_VSOCK_PORT);
+                    let connect_cmd = format!("CONNECT {AGENT_VSOCK_PORT}\n");
                     stream.write_all(connect_cmd.as_bytes()).await?;
 
                     // Read response line
@@ -91,10 +91,7 @@ impl AgentClient {
             }
 
             if start.elapsed() >= timeout {
-                return Err(anyhow!(
-                    "Agent did not become ready within {:?}",
-                    timeout
-                ));
+                return Err(anyhow!("Agent did not become ready within {timeout:?}"));
             }
 
             tokio::time::sleep(interval).await;
@@ -108,7 +105,7 @@ impl AgentClient {
             .inner
             .exec(req)
             .await
-            .map_err(|e| anyhow!("Agent exec failed: {}", e))?;
+            .map_err(|e| anyhow!("Agent exec failed: {e}"))?;
         Ok(response.into_inner())
     }
 }

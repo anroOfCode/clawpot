@@ -137,7 +137,7 @@ impl VmManager {
         Err(anyhow!(
             "Socket did not become ready after {} attempts ({} ms)",
             max_attempts,
-            max_attempts * delay.as_millis() as u32
+            max_attempts * u32::try_from(delay.as_millis()).unwrap_or(u32::MAX)
         ))
     }
 
@@ -214,9 +214,7 @@ impl VmManager {
             .context("Failed to enable entropy device")?;
 
         // Set vsock device if configured
-        if let (Some(guest_cid), Some(uds_path)) =
-            (config.guest_cid, &config.vsock_uds_path)
-        {
+        if let (Some(guest_cid), Some(uds_path)) = (config.guest_cid, &config.vsock_uds_path) {
             debug!("Setting vsock device: CID={}, UDS={}", guest_cid, uds_path);
             let vsock = crate::firecracker::VsockDevice {
                 guest_cid,

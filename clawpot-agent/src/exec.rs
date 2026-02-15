@@ -33,7 +33,7 @@ pub async fn run_command(req: ExecRequest) -> Result<ExecResponse> {
             Ok(ExecResponse {
                 exit_code: -1,
                 stdout: Vec::new(),
-                stderr: format!("Failed to execute command: {}\n", e).into_bytes(),
+                stderr: format!("Failed to execute command: {e}\n").into_bytes(),
             })
         }
         Err(_) => {
@@ -41,8 +41,11 @@ pub async fn run_command(req: ExecRequest) -> Result<ExecResponse> {
             Ok(ExecResponse {
                 exit_code: -1,
                 stdout: Vec::new(),
-                stderr: format!("Command timed out after {} seconds\n", EXEC_TIMEOUT.as_secs())
-                    .into_bytes(),
+                stderr: format!(
+                    "Command timed out after {} seconds\n",
+                    EXEC_TIMEOUT.as_secs()
+                )
+                .into_bytes(),
             })
         }
     }

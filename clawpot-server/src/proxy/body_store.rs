@@ -8,6 +8,7 @@ pub enum StoredBody {
     External(PathBuf),
 }
 
+#[allow(dead_code)]
 impl StoredBody {
     pub fn inline_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -31,8 +32,12 @@ pub struct BodyStore {
 
 impl BodyStore {
     pub fn new(storage_dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(storage_dir)
-            .with_context(|| format!("Failed to create body storage dir: {}", storage_dir.display()))?;
+        std::fs::create_dir_all(storage_dir).with_context(|| {
+            format!(
+                "Failed to create body storage dir: {}",
+                storage_dir.display()
+            )
+        })?;
         Ok(Self {
             storage_dir: storage_dir.to_path_buf(),
             inline_threshold: DEFAULT_INLINE_THRESHOLD,
@@ -46,7 +51,7 @@ impl BodyStore {
             return Ok(StoredBody::Inline(body.to_vec()));
         }
 
-        let path = self.storage_dir.join(format!("{}_{}.bin", request_id, suffix));
+        let path = self.storage_dir.join(format!("{request_id}_{suffix}.bin"));
         std::fs::write(&path, body)
             .with_context(|| format!("Failed to write body to {}", path.display()))?;
         Ok(StoredBody::External(path))

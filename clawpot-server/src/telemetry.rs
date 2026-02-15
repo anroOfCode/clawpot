@@ -36,8 +36,7 @@ pub fn init_telemetry() -> Result<SdkTracerProvider> {
 
     let otel_layer = OpenTelemetryLayer::new(tracer);
 
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     Registry::default()
         .with(filter)
