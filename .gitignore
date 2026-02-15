@@ -19,6 +19,9 @@ Cargo.lock
 *.swo
 *~
 
+# Dev VM state (per-worktree)
+/.devvm
+
 # OS files
 .DS_Store
 Thumbs.db
