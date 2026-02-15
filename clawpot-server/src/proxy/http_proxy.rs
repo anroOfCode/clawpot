@@ -28,7 +28,10 @@ struct ProxyCtx {
     body_store: Arc<BodyStore>,
     auth: Arc<AuthClient>,
     use_tls_upstream: bool,
-    http_client: Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, Full<Bytes>>,
+    http_client: Client<
+        hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>,
+        Full<Bytes>,
+    >,
 }
 
 /// Start both HTTP proxy listeners (plain HTTP + TLS upstream).
@@ -49,7 +52,10 @@ pub async fn run(
     }
     if !native.certs.is_empty() {
         let (added, ignored) = roots.add_parsable_certificates(native.certs);
-        info!("Loaded {} native TLS root certificates ({} ignored)", added, ignored);
+        info!(
+            "Loaded {} native TLS root certificates ({} ignored)",
+            added, ignored
+        );
     }
     let tls_config = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
@@ -65,12 +71,15 @@ pub async fn run(
     // Pre-bind both listeners before spawning tasks
     let http_listener = TcpListener::bind(HTTP_LISTEN_ADDR)
         .await
-        .with_context(|| format!("Failed to bind HTTP proxy on {}", HTTP_LISTEN_ADDR))?;
+        .with_context(|| format!("Failed to bind HTTP proxy on {HTTP_LISTEN_ADDR}"))?;
     let https_listener = TcpListener::bind(HTTPS_LISTEN_ADDR)
         .await
-        .with_context(|| format!("Failed to bind HTTP proxy on {}", HTTPS_LISTEN_ADDR))?;
+        .with_context(|| format!("Failed to bind HTTP proxy on {HTTPS_LISTEN_ADDR}"))?;
 
-    info!("HTTP proxy listening on {} and {}", HTTP_LISTEN_ADDR, HTTPS_LISTEN_ADDR);
+    info!(
+        "HTTP proxy listening on {} and {}",
+        HTTP_LISTEN_ADDR, HTTPS_LISTEN_ADDR
+    );
 
     // Signal readiness now that both sockets are bound
     let _ = ready.send(());
@@ -161,7 +170,7 @@ async fn handle_request(
             warn!("Proxy request failed: {:#}", e);
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
-                .body(Full::new(Bytes::from(format!("Proxy error: {}", e))))
+                .body(Full::new(Bytes::from(format!("Proxy error: {e}"))))
                 .unwrap())
         }
     }
@@ -179,8 +188,7 @@ async fn handle_request_inner(
         .registry
         .find_by_ip(peer_addr.ip())
         .await
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(|| "unknown".to_string(), |id| id.to_string());
 
     // 2. Extract request metadata
     let method = req.method().to_string();
@@ -191,12 +199,17 @@ async fn handle_request_inner(
         .unwrap_or("unknown")
         .to_string();
 
-    let path = req.uri().path_and_query()
-        .map(|pq| pq.as_str().to_string())
-        .unwrap_or_else(|| "/".to_string());
+    let path = req
+        .uri()
+        .path_and_query()
+        .map_or_else(|| "/".to_string(), |pq| pq.as_str().to_string());
 
-    let scheme = if ctx.use_tls_upstream { "https" } else { "http" };
-    let url = format!("{}://{}{}", scheme, host, path);
+    let scheme = if ctx.use_tls_upstream {
+        "https"
+    } else {
+        "http"
+    };
+    let url = format!("{scheme}://{host}{path}");
 
     let headers_map: HashMap<String, String> = req
         .headers()
@@ -210,7 +223,7 @@ async fn handle_request_inner(
     let req_body = body
         .collect()
         .await
-        .map(|c| c.to_bytes())
+        .map(http_body_util::Collected::to_bytes)
         .unwrap_or_default();
 
     // 3. Log request
@@ -221,21 +234,28 @@ async fn handle_request_inner(
         None => (None, None),
     };
 
-    let request_id = ctx.db.log_request(
-        &vm_id,
-        if ctx.use_tls_upstream { "https" } else { "http" },
-        Some(&method),
-        Some(&url),
-        Some(&headers_json),
-        None,
-        None,
-        Some(req_body.len() as i64),
-        body_inline,
-        body_path,
-    ).unwrap_or_else(|e| {
-        warn!("Failed to log request: {}", e);
-        0
-    });
+    let request_id = ctx
+        .db
+        .log_request(
+            &vm_id,
+            if ctx.use_tls_upstream {
+                "https"
+            } else {
+                "http"
+            },
+            Some(&method),
+            Some(&url),
+            Some(&headers_json),
+            None,
+            None,
+            Some(req_body.len() as i64),
+            body_inline,
+            body_path,
+        )
+        .unwrap_or_else(|e| {
+            warn!("Failed to log request: {}", e);
+            0
+        });
 
     // Re-store body with correct request_id if it was externalized
     if request_id > 0 {
@@ -254,28 +274,38 @@ async fn handle_request_inner(
     let auth_latency = auth_start.elapsed().as_millis() as i64;
 
     if request_id > 0 {
-        let _ = ctx.db.log_authorization(request_id, allowed, &reason, auth_latency);
+        let _ = ctx
+            .db
+            .log_authorization(request_id, allowed, &reason, auth_latency);
     }
 
     // 5. If denied, return 403
     if !allowed {
         let duration_ms = start.elapsed().as_millis() as i64;
         if request_id > 0 {
-            let _ = ctx.db.log_response(request_id, Some(403), Some(0), None, None, None, None, duration_ms);
+            let _ = ctx.db.log_response(
+                request_id,
+                Some(403),
+                Some(0),
+                None,
+                None,
+                None,
+                None,
+                duration_ms,
+            );
         }
         return Ok(Response::builder()
             .status(StatusCode::FORBIDDEN)
-            .body(Full::new(Bytes::from(format!("Denied: {}", reason))))
+            .body(Full::new(Bytes::from(format!("Denied: {reason}"))))
             .unwrap());
     }
 
     // 6. Forward to upstream
-    let upstream_uri: hyper::Uri = url.parse()
-        .with_context(|| format!("Invalid upstream URL: {}", url))?;
+    let upstream_uri: hyper::Uri = url
+        .parse()
+        .with_context(|| format!("Invalid upstream URL: {url}"))?;
 
-    let mut upstream_req = Request::builder()
-        .method(parts.method)
-        .uri(&upstream_uri);
+    let mut upstream_req = Request::builder().method(parts.method).uri(&upstream_uri);
 
     for (key, value) in &parts.headers {
         upstream_req = upstream_req.header(key, value);
@@ -285,7 +315,8 @@ async fn handle_request_inner(
         .body(Full::new(req_body.clone()))
         .context("Failed to build upstream request")?;
 
-    let upstream_resp = ctx.http_client
+    let upstream_resp = ctx
+        .http_client
         .request(upstream_req)
         .await
         .context("Upstream request failed")?;
@@ -303,7 +334,7 @@ async fn handle_request_inner(
         .into_body()
         .collect()
         .await
-        .map(|c| c.to_bytes())
+        .map(http_body_util::Collected::to_bytes)
         .unwrap_or_default();
 
     // 7. Log response
@@ -318,7 +349,7 @@ async fn handle_request_inner(
 
         let _ = ctx.db.log_response(
             request_id,
-            Some(status.as_u16() as i32),
+            Some(i32::from(status.as_u16())),
             Some(resp_body.len() as i64),
             resp_inline,
             resp_path,
@@ -339,7 +370,5 @@ async fn handle_request_inner(
         response = response.header(key.as_str(), value.as_str());
     }
 
-    Ok(response
-        .body(Full::new(resp_body))
-        .unwrap())
+    Ok(response.body(Full::new(resp_body)).unwrap())
 }

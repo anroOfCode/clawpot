@@ -56,9 +56,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Connect to gRPC server
-    let channel = Channel::from_shared(cli.server.clone())?
-        .connect()
-        .await?;
+    let channel = Channel::from_shared(cli.server.clone())?.connect().await?;
 
     let mut client = ClawpotServiceClient::new(channel);
 

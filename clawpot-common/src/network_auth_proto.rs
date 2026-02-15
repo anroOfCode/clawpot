@@ -1,1 +1,5 @@
-tonic::include_proto!("clawpot.network.v1");
+#[allow(clippy::all, clippy::pedantic)]
+mod inner {
+    tonic::include_proto!("clawpot.network.v1");
+}
+pub use inner::*;

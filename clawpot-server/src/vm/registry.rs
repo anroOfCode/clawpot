@@ -10,6 +10,7 @@ use uuid::Uuid;
 pub type VmId = Uuid;
 
 /// Entry in the VM registry containing VM metadata and manager
+#[allow(dead_code)]
 pub struct VmEntry {
     pub id: VmId,
     pub manager: VmManager,
@@ -40,7 +41,7 @@ impl VmRegistry {
         let mut vms = self.vms.write().await;
 
         if vms.contains_key(&id) {
-            return Err(anyhow!("VM with ID {} already exists", id));
+            return Err(anyhow!("VM with ID {id} already exists"));
         }
 
         vms.insert(id, entry);
@@ -53,19 +54,20 @@ impl VmRegistry {
         let mut vms = self.vms.write().await;
 
         vms.remove(id)
-            .ok_or_else(|| anyhow!("VM with ID {} not found", id))
+            .ok_or_else(|| anyhow!("VM with ID {id} not found"))
     }
 
     /// Get a reference to a VM entry
     /// Returns error if VM doesn't exist
     /// Note: This returns a clone since we can't hold a read lock across await points
+    #[allow(dead_code)]
     pub async fn get(&self, id: &VmId) -> Result<VmId> {
         let vms = self.vms.read().await;
 
         if vms.contains_key(id) {
             Ok(*id)
         } else {
-            Err(anyhow!("VM with ID {} not found", id))
+            Err(anyhow!("VM with ID {id} not found"))
         }
     }
 
@@ -89,18 +91,20 @@ impl VmRegistry {
     }
 
     /// Get the count of registered VMs
+    #[allow(dead_code)]
     pub async fn count(&self) -> usize {
         let vms = self.vms.read().await;
         vms.len()
     }
 
     /// Get VM entry for status query (returns subset of info without holding lock)
+    #[allow(dead_code)]
     pub async fn get_vm_info(&self, id: &VmId) -> Result<(IpAddr, String, u8, u32, SystemTime)> {
         let vms = self.vms.read().await;
 
         let entry = vms
             .get(id)
-            .ok_or_else(|| anyhow!("VM with ID {} not found", id))?;
+            .ok_or_else(|| anyhow!("VM with ID {id} not found"))?;
 
         Ok((
             entry.ip_address,
@@ -124,7 +128,7 @@ impl VmRegistry {
         let vms = self.vms.read().await;
         let entry = vms
             .get(id)
-            .ok_or_else(|| anyhow!("VM with ID {} not found", id))?;
+            .ok_or_else(|| anyhow!("VM with ID {id} not found"))?;
         Ok(entry.vsock_uds_path.clone())
     }
 }

@@ -4,13 +4,19 @@ use tracing::{info, warn};
 
 /// Helper to convert iptables Box<dyn Error> results into anyhow errors
 fn ipt_new() -> Result<iptables::IPTables> {
-    iptables::new(false).map_err(|e| anyhow::anyhow!("Failed to initialize iptables: {}", e))
+    iptables::new(false).map_err(|e| anyhow::anyhow!("Failed to initialize iptables: {e}"))
 }
 
 /// Helper to run an iptables operation with proper error conversion
-fn ipt_append(ipt: &iptables::IPTables, table: &str, chain: &str, rule: &str, description: &str) -> Result<()> {
+fn ipt_append(
+    ipt: &iptables::IPTables,
+    table: &str,
+    chain: &str,
+    rule: &str,
+    description: &str,
+) -> Result<()> {
     ipt.append(table, chain, rule)
-        .map_err(|e| anyhow::anyhow!("iptables rule '{}' failed: {}", description, e))?;
+        .map_err(|e| anyhow::anyhow!("iptables rule '{description}' failed: {e}"))?;
     info!("iptables: {}", description);
     Ok(())
 }
@@ -22,13 +28,16 @@ pub fn add_source_ip_rule(tap: &str, ip: IpAddr) -> Result<()> {
     let ip_str = ip.to_string();
 
     // iptables -A FORWARD -i <tap> ! -s <ip> -j DROP
-    let rule = format!("-i {} ! -s {} -j DROP", tap, ip_str);
-    ipt_append(&ipt, "filter", "FORWARD", &rule, &format!("enforce source IP {} on {}", ip_str, tap))?;
+    let rule = format!("-i {tap} ! -s {ip_str} -j DROP");
+    ipt_append(
+        &ipt,
+        "filter",
+        "FORWARD",
+        &rule,
+        &format!("enforce source IP {ip_str} on {tap}"),
+    )?;
 
-    info!(
-        "Added iptables rule: {} must use source IP {}",
-        tap, ip_str
-    );
+    info!("Added iptables rule: {} must use source IP {}", tap, ip_str);
 
     Ok(())
 }
@@ -45,13 +54,10 @@ pub fn remove_source_ip_rule(tap: &str, ip: IpAddr) -> Result<()> {
     };
     let ip_str = ip.to_string();
 
-    let rule = format!("-i {} ! -s {} -j DROP", tap, ip_str);
+    let rule = format!("-i {tap} ! -s {ip_str} -j DROP");
     match ipt.delete("filter", "FORWARD", &rule) {
-        Ok(_) => {
-            info!(
-                "Removed iptables rule for {} with IP {}",
-                tap, ip_str
-            );
+        Ok(()) => {
+            info!("Removed iptables rule for {} with IP {}", tap, ip_str);
         }
         Err(e) => {
             warn!(
@@ -71,18 +77,24 @@ pub fn add_proxy_redirect_rules(bridge: &str) -> Result<()> {
     let ipt = ipt_new()?;
 
     // Redirect HTTP (port 80) to Envoy transparent proxy
-    let rule = format!(
-        "-i {} -p tcp --dport 80 -j REDIRECT --to-port 10080",
-        bridge
-    );
-    ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT port 80 -> 10080")?;
+    let rule = format!("-i {bridge} -p tcp --dport 80 -j REDIRECT --to-port 10080");
+    ipt_append(
+        &ipt,
+        "nat",
+        "PREROUTING",
+        &rule,
+        "REDIRECT port 80 -> 10080",
+    )?;
 
     // Redirect HTTPS (port 443) to TLS MITM proxy
-    let rule = format!(
-        "-i {} -p tcp --dport 443 -j REDIRECT --to-port 10443",
-        bridge
-    );
-    ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT port 443 -> 10443")?;
+    let rule = format!("-i {bridge} -p tcp --dport 443 -j REDIRECT --to-port 10443");
+    ipt_append(
+        &ipt,
+        "nat",
+        "PREROUTING",
+        &rule,
+        "REDIRECT port 443 -> 10443",
+    )?;
 
     info!("Proxy redirect rules added for bridge {}", bridge);
     Ok(())
@@ -94,22 +106,22 @@ pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
     let ipt = ipt_new()?;
 
     // Redirect DNS (UDP) to DNS proxy
-    let rule = format!(
-        "-i {} -p udp --dport 53 -j REDIRECT --to-port 10053",
-        bridge
-    );
+    let rule = format!("-i {bridge} -p udp --dport 53 -j REDIRECT --to-port 10053");
     ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT DNS UDP → 10053")?;
 
     // Redirect DNS (TCP) to DNS proxy
-    let rule = format!(
-        "-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053",
-        bridge
-    );
+    let rule = format!("-i {bridge} -p tcp --dport 53 -j REDIRECT --to-port 10053");
     ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT DNS TCP → 10053")?;
 
     // Drop all other forwarded traffic from the bridge (must be last)
-    let rule = format!("-i {} -j DROP", bridge);
-    ipt_append(&ipt, "filter", "FORWARD", &rule, "DROP all other forwarded traffic")?;
+    let rule = format!("-i {bridge} -j DROP");
+    ipt_append(
+        &ipt,
+        "filter",
+        "FORWARD",
+        &rule,
+        "DROP all other forwarded traffic",
+    )?;
 
     info!("Egress filter rules added for bridge {}", bridge);
     Ok(())
@@ -122,13 +134,15 @@ pub fn ensure_proxy_redirect_rules(bridge: &str) -> Result<()> {
 
     let rules: &[(&str, &str, String, &str)] = &[
         (
-            "nat", "PREROUTING",
-            format!("-i {} -p tcp --dport 80 -j REDIRECT --to-port 10080", bridge),
+            "nat",
+            "PREROUTING",
+            format!("-i {bridge} -p tcp --dport 80 -j REDIRECT --to-port 10080"),
             "REDIRECT port 80 → 10080",
         ),
         (
-            "nat", "PREROUTING",
-            format!("-i {} -p tcp --dport 443 -j REDIRECT --to-port 10443", bridge),
+            "nat",
+            "PREROUTING",
+            format!("-i {bridge} -p tcp --dport 443 -j REDIRECT --to-port 10443"),
             "REDIRECT port 443 → 10443",
         ),
     ];
@@ -145,18 +159,21 @@ pub fn ensure_egress_filter_rules(bridge: &str) -> Result<()> {
 
     let rules: &[(&str, &str, String, &str)] = &[
         (
-            "nat", "PREROUTING",
-            format!("-i {} -p udp --dport 53 -j REDIRECT --to-port 10053", bridge),
+            "nat",
+            "PREROUTING",
+            format!("-i {bridge} -p udp --dport 53 -j REDIRECT --to-port 10053"),
             "REDIRECT DNS UDP → 10053",
         ),
         (
-            "nat", "PREROUTING",
-            format!("-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053", bridge),
+            "nat",
+            "PREROUTING",
+            format!("-i {bridge} -p tcp --dport 53 -j REDIRECT --to-port 10053"),
             "REDIRECT DNS TCP → 10053",
         ),
         (
-            "filter", "FORWARD",
-            format!("-i {} -j DROP", bridge),
+            "filter",
+            "FORWARD",
+            format!("-i {bridge} -j DROP"),
             "DROP all other forwarded traffic",
         ),
     ];
@@ -168,9 +185,16 @@ pub fn ensure_egress_filter_rules(bridge: &str) -> Result<()> {
 }
 
 /// Check if an iptables rule exists, and add it if not.
-fn ensure_iptables_rule(ipt: &iptables::IPTables, table: &str, chain: &str, rule: &str, description: &str) -> Result<()> {
-    let exists = ipt.exists(table, chain, rule)
-        .map_err(|e| anyhow::anyhow!("iptables exists check for '{}' failed: {}", description, e))?;
+fn ensure_iptables_rule(
+    ipt: &iptables::IPTables,
+    table: &str,
+    chain: &str,
+    rule: &str,
+    description: &str,
+) -> Result<()> {
+    let exists = ipt
+        .exists(table, chain, rule)
+        .map_err(|e| anyhow::anyhow!("iptables exists check for '{description}' failed: {e}"))?;
 
     if exists {
         info!("iptables: {} (already exists)", description);
@@ -194,40 +218,24 @@ pub fn remove_proxy_rules(bridge: &str) {
         (
             "nat",
             "PREROUTING",
-            format!(
-                "-i {} -p tcp --dport 80 -j REDIRECT --to-port 10080",
-                bridge
-            ),
+            format!("-i {bridge} -p tcp --dport 80 -j REDIRECT --to-port 10080"),
         ),
         (
             "nat",
             "PREROUTING",
-            format!(
-                "-i {} -p tcp --dport 443 -j REDIRECT --to-port 10443",
-                bridge
-            ),
+            format!("-i {bridge} -p tcp --dport 443 -j REDIRECT --to-port 10443"),
         ),
         (
             "nat",
             "PREROUTING",
-            format!(
-                "-i {} -p udp --dport 53 -j REDIRECT --to-port 10053",
-                bridge
-            ),
+            format!("-i {bridge} -p udp --dport 53 -j REDIRECT --to-port 10053"),
         ),
         (
             "nat",
             "PREROUTING",
-            format!(
-                "-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053",
-                bridge
-            ),
+            format!("-i {bridge} -p tcp --dport 53 -j REDIRECT --to-port 10053"),
         ),
-        (
-            "filter",
-            "FORWARD",
-            format!("-i {} -j DROP", bridge),
-        ),
+        ("filter", "FORWARD", format!("-i {bridge} -j DROP")),
     ];
 
     for (table, chain, rule) in rules {

@@ -7,8 +7,8 @@ use clawpot_common::proto::{
     clawpot_service_client::ClawpotServiceClient,
     clawpot_service_server::{ClawpotService, ClawpotServiceServer},
     CreateVmRequest, CreateVmResponse, DeleteVmRequest, DeleteVmResponse, ExecVmRequest,
-    ExecVmResponse, ExecVmStreamInput, ExecVmStreamOutput, ListVmsRequest, ListVmsResponse,
-    VmInfo, VmState as ProtoVmState,
+    ExecVmResponse, ExecVmStreamInput, ExecVmStreamOutput, ListVmsRequest, ListVmsResponse, VmInfo,
+    VmState as ProtoVmState,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

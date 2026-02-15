@@ -116,7 +116,7 @@ impl RequestDb {
             "UPDATE network_requests
              SET authorized = ?1, auth_reason = ?2, auth_latency_ms = ?3
              WHERE id = ?4",
-            rusqlite::params![authorized as i32, reason, latency_ms, request_id],
+            rusqlite::params![i32::from(authorized), reason, latency_ms, request_id],
         )
         .context("Failed to update authorization")?;
         Ok(())

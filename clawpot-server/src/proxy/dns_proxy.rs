@@ -36,11 +36,11 @@ async fn run_inner(
 ) -> Result<()> {
     let udp_socket = UdpSocket::bind(DNS_LISTEN_ADDR)
         .await
-        .with_context(|| format!("Failed to bind DNS proxy UDP on {}", DNS_LISTEN_ADDR))?;
+        .with_context(|| format!("Failed to bind DNS proxy UDP on {DNS_LISTEN_ADDR}"))?;
 
     let tcp_listener = TcpListener::bind(DNS_LISTEN_ADDR)
         .await
-        .with_context(|| format!("Failed to bind DNS proxy TCP on {}", DNS_LISTEN_ADDR))?;
+        .with_context(|| format!("Failed to bind DNS proxy TCP on {DNS_LISTEN_ADDR}"))?;
 
     info!("DNS proxy listening on {} (UDP+TCP)", DNS_LISTEN_ADDR);
 
@@ -117,19 +117,25 @@ async fn process_dns_query(
     let vm_id = registry
         .find_by_ip(peer_addr.ip())
         .await
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(|| "unknown".to_string(), |id| id.to_string());
 
     // 2. Parse DNS query
-    let (query_name, query_type) = parse_dns_question(packet)
-        .unwrap_or(("unknown".to_string(), "unknown".to_string()));
+    let (query_name, query_type) =
+        parse_dns_question(packet).unwrap_or(("unknown".to_string(), "unknown".to_string()));
 
     // 3. Log request
     let request_id = db
         .log_request(
-            &vm_id, "dns", None, None, None,
-            Some(&query_name), Some(&query_type),
-            None, None, None,
+            &vm_id,
+            "dns",
+            None,
+            None,
+            None,
+            Some(&query_name),
+            Some(&query_type),
+            None,
+            None,
+            None,
         )
         .unwrap_or(0);
 
@@ -150,7 +156,16 @@ async fn process_dns_query(
         let refused = build_refused_response(packet);
         let duration_ms = start.elapsed().as_millis() as i64;
         if request_id > 0 {
-            let _ = db.log_response(request_id, Some(5), None, None, None, None, Some("REFUSED"), duration_ms);
+            let _ = db.log_response(
+                request_id,
+                Some(5),
+                None,
+                None,
+                None,
+                None,
+                Some("REFUSED"),
+                duration_ms,
+            );
         }
         return Ok(refused);
     }
@@ -175,13 +190,22 @@ async fn process_dns_query(
     // 7. Log response
     let duration_ms = start.elapsed().as_millis() as i64;
     let rcode = if resp_len >= 4 {
-        Some((resp_buf[3] & 0x0F) as i32)
+        Some(i32::from(resp_buf[3] & 0x0F))
     } else {
         None
     };
 
     if request_id > 0 {
-        let _ = db.log_response(request_id, rcode, Some(resp_len as i64), None, None, None, None, duration_ms);
+        let _ = db.log_response(
+            request_id,
+            rcode,
+            Some(resp_len as i64),
+            None,
+            None,
+            None,
+            None,
+            duration_ms,
+        );
     }
 
     Ok(response)
@@ -202,7 +226,7 @@ async fn handle_tcp_dns_connection(
             Err(e) => {
                 // EOF is normal — client closed connection
                 if e.downcast_ref::<std::io::Error>()
-                    .map_or(false, |io_err| io_err.kind() == std::io::ErrorKind::UnexpectedEof)
+                    .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::UnexpectedEof)
                 {
                     break;
                 }
@@ -226,7 +250,8 @@ async fn handle_tcp_dns_connection(
             .await
             .context("Failed to bind upstream UDP socket for TCP DNS")?;
 
-        let response = process_dns_query(&msg_buf, peer_addr, registry, db, auth, &upstream_socket).await?;
+        let response =
+            process_dns_query(&msg_buf, peer_addr, registry, db, auth, &upstream_socket).await?;
 
         // Write length-prefixed response
         write_dns_message(&mut stream, &response).await?;
@@ -238,16 +263,28 @@ async fn handle_tcp_dns_connection(
 /// Read a 2-byte big-endian DNS TCP length prefix.
 async fn read_dns_length<R: AsyncRead + Unpin>(reader: &mut R) -> Result<usize> {
     let mut len_buf = [0u8; 2];
-    reader.read_exact(&mut len_buf).await.context("Failed to read DNS TCP length prefix")?;
+    reader
+        .read_exact(&mut len_buf)
+        .await
+        .context("Failed to read DNS TCP length prefix")?;
     Ok(u16::from_be_bytes(len_buf) as usize)
 }
 
 /// Write a DNS message with a 2-byte big-endian length prefix.
 async fn write_dns_message<W: AsyncWrite + Unpin>(writer: &mut W, message: &[u8]) -> Result<()> {
     let len = (message.len() as u16).to_be_bytes();
-    writer.write_all(&len).await.context("Failed to write DNS TCP length prefix")?;
-    writer.write_all(message).await.context("Failed to write DNS TCP message")?;
-    writer.flush().await.context("Failed to flush DNS TCP message")?;
+    writer
+        .write_all(&len)
+        .await
+        .context("Failed to write DNS TCP length prefix")?;
+    writer
+        .write_all(message)
+        .await
+        .context("Failed to write DNS TCP message")?;
+    writer
+        .flush()
+        .await
+        .context("Failed to flush DNS TCP message")?;
     Ok(())
 }
 
@@ -316,7 +353,7 @@ fn build_refused_response(query: &[u8]) -> Vec<u8> {
     // Set QR bit (response) and RCODE=5 (REFUSED)
     resp[2] = (resp[2] | 0x80) & 0xFD; // Set QR=1, clear AA
     resp[3] = (resp[3] & 0xF0) | 0x05; // RCODE=5
-    // Zero out answer/authority/additional counts
+                                       // Zero out answer/authority/additional counts
     resp[6..12].copy_from_slice(&[0, 0, 0, 0, 0, 0]);
     resp
 }
@@ -403,7 +440,11 @@ mod tests {
             write_dns_message(&mut w2, &msg).await.unwrap();
 
             let decoded_len = read_dns_length(&mut r2).await.unwrap();
-            assert_eq!(decoded_len, size, "Write helper length mismatch for size {}", size);
+            assert_eq!(
+                decoded_len, size,
+                "Write helper length mismatch for size {}",
+                size
+            );
 
             if size > 0 {
                 let mut decoded_buf = vec![0u8; decoded_len];

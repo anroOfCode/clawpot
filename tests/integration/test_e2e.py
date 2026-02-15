@@ -31,8 +31,10 @@ SERVER_ENV = {
     "CLAWPOT_ROOT": PROJECT_ROOT,
     "PATH": (
         os.path.expanduser("~/.cargo/bin")
-        + ":" + os.path.expanduser("~/.local/bin")
-        + ":" + os.environ.get("PATH", "")
+        + ":"
+        + os.path.expanduser("~/.local/bin")
+        + ":"
+        + os.environ.get("PATH", "")
     ),
 }
 
@@ -134,7 +136,7 @@ def server():
 
     # Start server
     log.info("Starting clawpot-server (pid will follow)...")
-    server_log = open(os.path.join(PROJECT_ROOT, "target", "server-test.log"), "w")
+    server_log = open(os.path.join(PROJECT_ROOT, "target", "server-test.log"), "w")  # noqa: SIM115
     proc = subprocess.Popen(
         [SERVER_BIN],
         env=SERVER_ENV,
@@ -265,10 +267,18 @@ class TestE2E:
         assert "192.168.100.1" in stdout_dns, "Expected nameserver 192.168.100.1 in resolv.conf"
 
         # Test DNS resolution via the DNS proxy (resolves through gateway)
+        cmd = (
+            "timeout 10 bash -c"
+            " '(echo > /dev/tcp/192.168.100.1/53) 2>/dev/null"
+            " && echo DNS_REACHABLE || echo DNS_UNREACHABLE'"
+        )
         stdout, stderr, rc = cli(
-            "exec", _vm_id, "--",
-            "bash", "-c",
-            "timeout 10 bash -c '(echo > /dev/tcp/192.168.100.1/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
+            "exec",
+            _vm_id,
+            "--",
+            "bash",
+            "-c",
+            cmd,
             timeout=20,
         )
         combined = (stdout + stderr).strip()
@@ -279,10 +289,20 @@ class TestE2E:
         """Test that HTTP egress works through the Envoy proxy."""
         assert _vm_id is not None, "No VM created"
 
+        cmd = (
+            "timeout 10 bash -c '(echo -e"
+            ' "GET / HTTP/1.1\\r\\nHost: example.com'
+            '\\r\\nConnection: close\\r\\n\\r\\n"'
+            " > /dev/tcp/93.184.216.34/80"
+            " && echo HTTP_OK) || echo HTTP_FAIL'"
+        )
         stdout, stderr, rc = cli(
-            "exec", _vm_id, "--",
-            "bash", "-c",
-            "timeout 10 bash -c '(echo -e \"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n\" > /dev/tcp/93.184.216.34/80 && echo HTTP_OK) || echo HTTP_FAIL'",
+            "exec",
+            _vm_id,
+            "--",
+            "bash",
+            "-c",
+            cmd,
             timeout=20,
         )
         combined = (stdout + stderr).strip()
@@ -296,10 +316,22 @@ class TestE2E:
         # Use curl with -k (skip cert verification) since we're testing the
         # proxy chain, not the CA trust store.  Use --max-time instead of the
         # timeout command so curl can flush output before exiting.
+        cmd = (
+            "if command -v curl &>/dev/null; then"
+            " curl -4 -k --max-time 15 --connect-timeout 5"
+            " -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n'"
+            " https://example.com 2>&1; echo CURL_EXIT=$?;"
+            " else timeout 12 bash -c"
+            " '(echo > /dev/tcp/example.com/443) 2>/dev/null"
+            " && echo HTTPS_OK || echo HTTPS_FAIL'; fi"
+        )
         stdout, stderr, rc = cli(
-            "exec", _vm_id, "--",
-            "bash", "-c",
-            "if command -v curl &>/dev/null; then curl -4 -k --max-time 15 --connect-timeout 5 -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n' https://example.com 2>&1; echo CURL_EXIT=$?; else timeout 12 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            "exec",
+            _vm_id,
+            "--",
+            "bash",
+            "-c",
+            cmd,
             timeout=30,
         )
         combined = (stdout + stderr).strip()
@@ -311,10 +343,18 @@ class TestE2E:
         assert _vm_id is not None, "No VM created"
 
         # Try to connect to port 22 on an external host — should be blocked
+        cmd = (
+            "timeout 5 bash -c"
+            " '(echo > /dev/tcp/8.8.8.8/22) 2>/dev/null"
+            " && echo PORT22_OPEN || echo PORT22_BLOCKED'"
+        )
         stdout, stderr, rc = cli(
-            "exec", _vm_id, "--",
-            "bash", "-c",
-            "timeout 5 bash -c '(echo > /dev/tcp/8.8.8.8/22) 2>/dev/null && echo PORT22_OPEN || echo PORT22_BLOCKED'",
+            "exec",
+            _vm_id,
+            "--",
+            "bash",
+            "-c",
+            cmd,
             timeout=15,
         )
         combined = (stdout + stderr).strip()

@@ -52,29 +52,18 @@ impl VmLifecycle {
     /// Transition to a new state, validating the transition is legal
     pub fn transition_to(&mut self, new_state: VmState) -> Result<()> {
         // Validate state transition
-        let is_valid = match (self.state, new_state) {
+        let is_valid = matches!(
+            (self.state, new_state),
             // Can always transition to error state
-            (_, VmState::Error) => true,
-
-            // Normal forward transitions
-            (VmState::NotStarted, VmState::Starting) => true,
-            (VmState::Starting, VmState::Running) => true,
-            (VmState::Running, VmState::Stopping) => true,
-            (VmState::Stopping, VmState::Stopped) => true,
-
-            // Allow restarting from stopped
-            (VmState::Stopped, VmState::Starting) => true,
-
-            // Allow stopping from starting if something goes wrong
-            (VmState::Starting, VmState::Stopping) => true,
-            (VmState::Starting, VmState::Stopped) => true,
-
-            // Same state transition is a no-op
-            (old, new) if old == new => true,
-
-            // All other transitions are invalid
-            _ => false,
-        };
+            (_, VmState::Error)
+                | (VmState::NotStarted | VmState::Stopped, VmState::Starting)
+                | (
+                    VmState::Starting,
+                    VmState::Running | VmState::Stopping | VmState::Stopped
+                )
+                | (VmState::Running, VmState::Stopping)
+                | (VmState::Stopping, VmState::Stopped)
+        ) || self.state == new_state;
 
         if !is_valid {
             return Err(anyhow!(

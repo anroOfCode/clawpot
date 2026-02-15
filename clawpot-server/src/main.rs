@@ -30,28 +30,27 @@ async fn main() -> Result<()> {
         .expect("Failed to install default CryptoProvider");
 
     // Initialize telemetry (stdout logging + OTLP export)
-    let tracer_provider = telemetry::init_telemetry()
-        .expect("Failed to initialize telemetry");
+    let tracer_provider = telemetry::init_telemetry().expect("Failed to initialize telemetry");
 
     info!("Starting clawpot-server...");
 
     // Check if running as root
     if !nix::unistd::geteuid().is_root() {
         error!("Server must be run as root (use sudo)");
-        anyhow::bail!("Server must be run as root (sudo required for TAP devices, bridge, and iptables)");
+        anyhow::bail!(
+            "Server must be run as root (sudo required for TAP devices, bridge, and iptables)"
+        );
     }
 
     info!("Running as root ✓");
 
     // Server configuration - resolve paths relative to the binary or use env override
     let project_root = std::env::var("CLAWPOT_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/workspaces/clawpot"));
+        .map_or_else(|_| PathBuf::from("/workspaces/clawpot"), PathBuf::from);
 
     // Initialize networking
-    let network_manager = Arc::new(
-        NetworkManager::new().context("Failed to create network manager")?,
-    );
+    let network_manager =
+        Arc::new(NetworkManager::new().context("Failed to create network manager")?);
 
     info!("Ensuring network bridge exists...");
     network_manager
@@ -63,9 +62,7 @@ async fn main() -> Result<()> {
 
     // Initialize CA
     let ca_dir = project_root.join("ca");
-    let ca = Arc::new(
-        CertificateAuthority::new(&ca_dir).context("Failed to initialize CA")?,
-    );
+    let ca = Arc::new(CertificateAuthority::new(&ca_dir).context("Failed to initialize CA")?);
     info!("Certificate authority ready ✓");
 
     // Initialize request database
@@ -75,9 +72,8 @@ async fn main() -> Result<()> {
 
     // Initialize body store
     let body_store_dir = project_root.join("data/bodies");
-    let body_store = Arc::new(
-        BodyStore::new(&body_store_dir).context("Failed to initialize body store")?,
-    );
+    let body_store =
+        Arc::new(BodyStore::new(&body_store_dir).context("Failed to initialize body store")?);
     info!("Body store ready ✓");
 
     // Initialize authorization client
@@ -118,7 +114,16 @@ async fn main() -> Result<()> {
     let http_auth = auth.clone();
     let http_cancel = cancel_rx.clone();
     let _http_handle = tokio::spawn(async move {
-        if let Err(e) = proxy::http_proxy::run(http_registry, http_db, http_body_store, http_auth, http_cancel, http_ready_tx).await {
+        if let Err(e) = proxy::http_proxy::run(
+            http_registry,
+            http_db,
+            http_body_store,
+            http_auth,
+            http_cancel,
+            http_ready_tx,
+        )
+        .await
+        {
             error!("HTTP proxy failed: {:#}", e);
         }
     });
@@ -133,7 +138,9 @@ async fn main() -> Result<()> {
     });
 
     // Wait for all proxies to be ready before starting gRPC
-    mitm_ready_rx.await.context("TLS MITM proxy failed to start")?;
+    mitm_ready_rx
+        .await
+        .context("TLS MITM proxy failed to start")?;
     info!("TLS MITM proxy started ✓");
 
     http_ready_rx.await.context("HTTP proxy failed to start")?;
@@ -180,12 +187,7 @@ async fn main() -> Result<()> {
         .add_service(ClawpotServiceServer::new(service))
         .serve_with_shutdown(
             addr,
-            shutdown_signal(
-                vm_registry,
-                network_manager,
-                ip_allocator,
-                cancel_tx,
-            ),
+            shutdown_signal(vm_registry, network_manager, ip_allocator, cancel_tx),
         )
         .await
         .context("gRPC server failed")?;

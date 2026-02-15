@@ -1,3 +1,3 @@
 pub mod registry;
 
-pub use registry::{VmEntry, VmId, VmRegistry};
+pub use registry::{VmEntry, VmRegistry};

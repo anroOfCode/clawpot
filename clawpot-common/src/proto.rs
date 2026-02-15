@@ -1,2 +1,6 @@
 // Include the generated protobuf code
-tonic::include_proto!("clawpot.v1");
+#[allow(clippy::all, clippy::pedantic)]
+mod inner {
+    tonic::include_proto!("clawpot.v1");
+}
+pub use inner::*;
