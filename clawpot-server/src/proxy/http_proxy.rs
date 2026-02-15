@@ -40,8 +40,22 @@ pub async fn run(
     mut cancel: tokio::sync::watch::Receiver<bool>,
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()> {
+    // Build TLS root store: start with webpki roots, then add native roots for wider coverage
+    let mut roots = rustls::RootCertStore::empty();
+    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let native = rustls_native_certs::load_native_certs();
+    if !native.errors.is_empty() {
+        warn!("Errors loading native TLS roots: {:?}", native.errors);
+    }
+    if !native.certs.is_empty() {
+        let (added, ignored) = roots.add_parsable_certificates(native.certs);
+        info!("Loaded {} native TLS root certificates ({} ignored)", added, ignored);
+    }
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
     let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
-        .with_webpki_roots()
+        .with_tls_config(tls_config)
         .https_or_http()
         .enable_http1()
         .build();
