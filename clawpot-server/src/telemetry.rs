@@ -17,10 +17,11 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// Configuration is via standard OTel environment variables:
 /// - `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317`)
 /// - `RUST_LOG` (default: `info`)
-pub fn init_telemetry() -> Result<SdkTracerProvider> {
+pub fn init_telemetry(session_id: &str) -> Result<SdkTracerProvider> {
     let resource = Resource::builder()
         .with_service_name("clawpot-server")
         .with_attribute(KeyValue::new("service.version", env!("CARGO_PKG_VERSION")))
+        .with_attribute(KeyValue::new("session.id", session_id.to_string()))
         .build();
 
     let exporter = SpanExporter::builder().with_tonic().build()?;

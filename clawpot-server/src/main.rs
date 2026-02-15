@@ -1,4 +1,5 @@
 mod agent;
+mod events;
 mod grpc;
 mod network;
 mod proxy;
@@ -7,18 +8,19 @@ mod vm;
 
 use anyhow::{Context, Result};
 use clawpot_common::proto::clawpot_service_server::ClawpotServiceServer;
+use events::{EventStore, PersistMode};
 use grpc::ClawpotServiceImpl;
 use network::{ip_allocator::IpAllocator, NetworkManager};
 use proxy::auth_client::AuthClient;
 use proxy::body_store::BodyStore;
 use proxy::ca::CertificateAuthority;
-use proxy::db::RequestDb;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
 use tracing::{error, info, warn};
+use uuid::Uuid;
 use vm::VmRegistry;
 
 #[tokio::main]
@@ -29,10 +31,14 @@ async fn main() -> Result<()> {
         .install_default()
         .expect("Failed to install default CryptoProvider");
 
-    // Initialize telemetry (stdout logging + OTLP export)
-    let tracer_provider = telemetry::init_telemetry().expect("Failed to initialize telemetry");
+    // Generate session ID for this server run
+    let session_id = Uuid::new_v4().to_string();
 
-    info!("Starting clawpot-server...");
+    // Initialize telemetry (stdout logging + OTLP export)
+    let tracer_provider =
+        telemetry::init_telemetry(&session_id).expect("Failed to initialize telemetry");
+
+    info!("Starting clawpot-server (session {})...", session_id);
 
     // Check if running as root
     if !nix::unistd::geteuid().is_root() {
@@ -42,58 +48,83 @@ async fn main() -> Result<()> {
         );
     }
 
-    info!("Running as root ✓");
+    info!("Running as root");
 
     // Server configuration - resolve paths relative to the binary or use env override
     let project_root = std::env::var("CLAWPOT_ROOT")
         .map_or_else(|_| PathBuf::from("/workspaces/clawpot"), PathBuf::from);
 
+    // Initialize event store
+    let events_db_path = std::env::var("CLAWPOT_EVENTS_DB")
+        .map_or_else(|_| project_root.join("data/events.db"), PathBuf::from);
+    let persist_mode = PersistMode::from_env();
+
+    let auth_addr = std::env::var("CLAWPOT_AUTH_ADDR").ok();
+
+    let event_store = EventStore::new(
+        &events_db_path,
+        &session_id,
+        env!("CARGO_PKG_VERSION"),
+        &serde_json::json!({
+            "root": project_root.to_string_lossy(),
+            "auth_addr": auth_addr,
+        })
+        .to_string(),
+        persist_mode,
+    )
+    .context("Failed to initialize event store")?;
+
+    clawpot_event!(event_store, "server.started", "server", {
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+        "config_root": project_root.to_string_lossy().to_string(),
+        "auth_addr": auth_addr
+    });
+
     // Initialize networking
     let network_manager =
         Arc::new(NetworkManager::new().context("Failed to create network manager")?);
 
-    info!("Ensuring network bridge exists...");
+    clawpot_log!(event_store, "server", "Ensuring network bridge exists...");
     network_manager
         .ensure_bridge()
         .await
         .context("Failed to ensure bridge exists")?;
 
-    info!("Network bridge ready ✓");
+    clawpot_log!(event_store, "server", "Network bridge ready");
 
     // Initialize CA
     let ca_dir = project_root.join("ca");
     let ca = Arc::new(CertificateAuthority::new(&ca_dir).context("Failed to initialize CA")?);
-    info!("Certificate authority ready ✓");
-
-    // Initialize request database
-    let db_path = project_root.join("data/network_requests.db");
-    let db = RequestDb::new(&db_path).context("Failed to initialize request database")?;
-    info!("Request database ready ✓");
+    clawpot_log!(event_store, "server", "Certificate authority ready");
 
     // Initialize body store
     let body_store_dir = project_root.join("data/bodies");
     let body_store =
         Arc::new(BodyStore::new(&body_store_dir).context("Failed to initialize body store")?);
-    info!("Body store ready ✓");
+    clawpot_log!(event_store, "server", "Body store ready");
 
     // Initialize authorization client
-    let auth_addr = std::env::var("CLAWPOT_AUTH_ADDR").ok();
     let auth = Arc::new(
         AuthClient::new(auth_addr.as_deref())
             .await
             .context("Failed to initialize auth client")?,
     );
-    info!("Authorization client ready ✓");
+    clawpot_log!(event_store, "server", "Authorization client ready");
 
     // Create shared cancellation channel
     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
 
     // Initialize IP allocator and VM registry (before proxies so registry is available)
     let ip_allocator = Arc::new(Mutex::new(IpAllocator::new()));
-    info!("IP allocator initialized (192.168.100.2-254) ✓");
+    clawpot_log!(
+        event_store,
+        "server",
+        "IP allocator initialized (192.168.100.2-254)"
+    );
 
     let vm_registry = Arc::new(VmRegistry::new());
-    info!("VM registry initialized ✓");
+    clawpot_log!(event_store, "server", "VM registry initialized");
 
     // Create oneshot channels for proxy startup verification
     let (mitm_ready_tx, mitm_ready_rx) = tokio::sync::oneshot::channel();
@@ -109,14 +140,14 @@ async fn main() -> Result<()> {
 
     // Start HTTP proxy
     let http_registry = vm_registry.clone();
-    let http_db = db.clone();
+    let http_events = event_store.clone();
     let http_body_store = body_store.clone();
     let http_auth = auth.clone();
     let http_cancel = cancel_rx.clone();
     let _http_handle = tokio::spawn(async move {
         if let Err(e) = proxy::http_proxy::run(
             http_registry,
-            http_db,
+            http_events,
             http_body_store,
             http_auth,
             http_cancel,
@@ -130,24 +161,24 @@ async fn main() -> Result<()> {
 
     // Start DNS proxy
     let dns_registry = vm_registry.clone();
-    let dns_db = db.clone();
+    let dns_events = event_store.clone();
     let dns_auth = auth.clone();
     let dns_cancel = cancel_rx.clone();
     let _dns_handle = tokio::spawn(async move {
-        proxy::dns_proxy::run(dns_registry, dns_db, dns_auth, dns_cancel, dns_ready_tx).await;
+        proxy::dns_proxy::run(dns_registry, dns_events, dns_auth, dns_cancel, dns_ready_tx).await;
     });
 
     // Wait for all proxies to be ready before starting gRPC
     mitm_ready_rx
         .await
         .context("TLS MITM proxy failed to start")?;
-    info!("TLS MITM proxy started ✓");
+    clawpot_log!(event_store, "server", "TLS MITM proxy started");
 
     http_ready_rx.await.context("HTTP proxy failed to start")?;
-    info!("HTTP proxy started ✓");
+    clawpot_log!(event_store, "server", "HTTP proxy started");
 
     dns_ready_rx.await.context("DNS proxy failed to start")?;
-    info!("DNS proxy started ✓");
+    clawpot_log!(event_store, "server", "DNS proxy started");
 
     let kernel_path = project_root.join("assets/kernels/vmlinux");
     let rootfs_path = project_root.join("assets/rootfs/ubuntu.ext4");
@@ -167,7 +198,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    info!("VM assets verified ✓");
+    clawpot_log!(event_store, "server", "VM assets verified");
 
     // Create gRPC service
     let service = ClawpotServiceImpl::new(
@@ -176,21 +207,34 @@ async fn main() -> Result<()> {
         network_manager.clone(),
         kernel_path,
         rootfs_path,
+        event_store.clone(),
     );
 
     // Bind address
     let addr = "0.0.0.0:50051".parse()?;
-    info!("Starting gRPC server on {}", addr);
+    clawpot_log!(event_store, "server", "Starting gRPC server on {}", addr);
 
     // Start gRPC server with graceful shutdown
     Server::builder()
         .add_service(ClawpotServiceServer::new(service))
         .serve_with_shutdown(
             addr,
-            shutdown_signal(vm_registry, network_manager, ip_allocator, cancel_tx),
+            shutdown_signal(
+                vm_registry,
+                network_manager,
+                ip_allocator,
+                cancel_tx,
+                event_store.clone(),
+            ),
         )
         .await
         .context("gRPC server failed")?;
+
+    clawpot_event!(event_store, "server.stopped", "server", {
+        "reason": "shutdown"
+    });
+
+    event_store.close_session().await;
 
     info!("Server shut down successfully");
 
@@ -209,6 +253,7 @@ async fn shutdown_signal(
     network_manager: Arc<NetworkManager>,
     ip_allocator: Arc<Mutex<IpAllocator>>,
     cancel_tx: tokio::sync::watch::Sender<bool>,
+    event_store: EventStore,
 ) {
     // Wait for SIGINT (Ctrl+C) or SIGTERM
     let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
@@ -217,7 +262,7 @@ async fn shutdown_signal(
     tokio::select! {
         result = signal::ctrl_c() => {
             match result {
-                Ok(()) => info!("Received SIGINT, initiating graceful shutdown..."),
+                Ok(()) => clawpot_log!(event_store, "server", "Received SIGINT, initiating graceful shutdown..."),
                 Err(err) => {
                     error!("Failed to listen for SIGINT: {}", err);
                     return;
@@ -225,19 +270,24 @@ async fn shutdown_signal(
             }
         }
         _ = sigterm.recv() => {
-            info!("Received SIGTERM, initiating graceful shutdown...");
+            clawpot_log!(event_store, "server", "Received SIGTERM, initiating graceful shutdown...");
         }
     }
 
     // Cleanup all VMs
-    info!("Cleaning up all VMs...");
+    clawpot_log!(event_store, "server", "Cleaning up all VMs...");
 
     let vms_list = registry.list().await;
-    info!("Found {} VMs to clean up", vms_list.len());
+    clawpot_log!(
+        event_store,
+        "server",
+        "Found {} VMs to clean up",
+        vms_list.len()
+    );
 
     for (vm_id, ip_address, tap_name, _, _, _) in vms_list {
         let _cleanup_span = tracing::info_span!("shutdown.cleanup_vm", vm_id = %vm_id).entered();
-        info!("Cleaning up VM {}", vm_id);
+        clawpot_log!(event_store, "server", vm_id = vm_id, "Cleaning up VM");
 
         // Remove from registry and stop VM
         match registry.remove(&vm_id).await {
@@ -257,7 +307,12 @@ async fn shutdown_signal(
                     warn!("Failed to release IP {}: {}", ip_address, e);
                 }
 
-                info!("VM {} cleaned up successfully", vm_id);
+                clawpot_log!(
+                    event_store,
+                    "server",
+                    vm_id = vm_id,
+                    "VM cleaned up successfully"
+                );
             }
             Err(e) => {
                 warn!("Failed to remove VM {} from registry: {}", vm_id, e);
@@ -266,9 +321,13 @@ async fn shutdown_signal(
     }
 
     // Stop proxy infrastructure
-    info!("Stopping proxy infrastructure...");
+    clawpot_log!(event_store, "server", "Stopping proxy infrastructure...");
     let _ = cancel_tx.send(true);
     network::iptables::remove_proxy_rules(network_manager.bridge_name());
 
-    info!("All VMs cleaned up. Server shutting down.");
+    clawpot_log!(
+        event_store,
+        "server",
+        "All VMs cleaned up. Server shutting down."
+    );
 }

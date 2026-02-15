@@ -88,6 +88,15 @@ if [ -f "target/server-test.log" ]; then
     echo "Collected server-test.log"
 fi
 
+# --- Export events database artifacts ---
+
+EVENTS_DB="$WORK_DIR/data/events.db"
+if [ -f "$EVENTS_DB" ]; then
+    "$WORK_DIR/target/debug/clawpot" logs export --db "$EVENTS_DB" > "$ARTIFACTS_DIR/events.jsonl" 2>/dev/null || true
+    "$WORK_DIR/target/debug/clawpot" logs timeline --db "$EVENTS_DB" > "$ARTIFACTS_DIR/timeline.txt" 2>/dev/null || true
+    echo "Collected events.jsonl and timeline.txt"
+fi
+
 echo ""
 echo "=== Test run complete (exit code: $TEST_EXIT) ==="
 echo "Artifacts:"
