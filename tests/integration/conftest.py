@@ -67,14 +67,25 @@ def _emit_event(
 
 
 class EventLogPlugin:
-    """Pytest plugin that logs test events to the events DB."""
+    """Pytest plugin that logs test events to the events DB.
+
+    Connection is lazy: we try to connect on the first test setup, after
+    session-scoped fixtures (like the server fixture) have already started.
+    """
 
     def __init__(self):
         self.conn = None
         self.session_id = None
         self._test_starts = {}
+        self._connect_attempted = False
 
-    def _connect(self):
+    def _ensure_connected(self):
+        """Try to connect to the events DB (once)."""
+        if self.conn is not None:
+            return True
+        if self._connect_attempted:
+            return False
+        self._connect_attempted = True
         db_path = _events_db_path()
         if not os.path.exists(db_path):
             return False
@@ -82,24 +93,17 @@ class EventLogPlugin:
             self.conn = sqlite3.connect(db_path)
             self.conn.execute("PRAGMA busy_timeout=5000")
             self.session_id = _get_session_id(self.conn)
-            return self.session_id is not None
+            if self.session_id is None:
+                self.conn.close()
+                self.conn = None
+                return False
+            return True
         except Exception:
             self.conn = None
             return False
 
-    def pytest_sessionstart(self, session):
-        if not self._connect():
-            return
-        _emit_event(
-            self.conn,
-            self.session_id,
-            "test.session.started",
-            "test",
-            data={"pytest_session_id": str(id(session))},
-        )
-
     def pytest_runtest_setup(self, item):
-        if not self.conn:
+        if not self._ensure_connected():
             return
         self._test_starts[item.nodeid] = time.monotonic()
         _emit_event(
