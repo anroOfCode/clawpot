@@ -80,11 +80,14 @@ echo "--- Running integration tests"
 
 cd tests/integration
 
-# Run pytest, capturing output to both console and log file
+# Run pytest, capturing output to both console and log file.
+# Disable set -e so that test failures don't skip artifact collection.
+set +eo pipefail
 uv run pytest -v -s --timeout=120 \
     --junitxml="$ARTIFACTS_DIR/test-results.xml" \
     2>&1 | tee "$ARTIFACTS_DIR/pytest-output.log"
 TEST_EXIT=${PIPESTATUS[0]}
+set -eo pipefail
 
 cd "$WORK_DIR"
 

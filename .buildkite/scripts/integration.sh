@@ -95,9 +95,12 @@ rm -f "$_secrets_file"
 # --- Run tests inside inner VM ---
 echo "--- :microscope: Run integration tests"
 
-# Unpack and run install_and_test.sh as root inside the inner VM
+# Unpack and run install_and_test.sh as root inside the inner VM.
+# Disable set -e so test failures don't skip artifact collection.
+set +e
 $SSH_CMD "cd /work && tar xzf build.tar.gz && sudo bash /work/clawpot/install_and_test.sh"
 TEST_EXIT=$?
+set -e
 
 # --- Collect artifacts ---
 echo "--- :floppy_disk: Collect artifacts"
