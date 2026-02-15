@@ -40,19 +40,11 @@ pub async fn run(
     mut cancel: tokio::sync::watch::Receiver<bool>,
     ready: tokio::sync::oneshot::Sender<()>,
 ) -> Result<()> {
-    let https_connector = match hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()
-    {
-        Ok(builder) => builder,
-        Err(e) => {
-            warn!("Failed to load native TLS roots ({}), falling back to webpki roots", e);
-            hyper_rustls::HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-        }
-    }
-    .https_or_http()
-    .enable_http1()
-    .build();
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_or_http()
+        .enable_http1()
+        .build();
 
     let http_client = Client::builder(TokioExecutor::new()).build(https_connector);
 
