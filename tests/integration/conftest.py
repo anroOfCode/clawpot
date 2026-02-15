@@ -12,6 +12,8 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
+import pytest
+
 
 def _events_db_path():
     """Resolve the events DB path from CLAWPOT_EVENTS_DB or CLAWPOT_ROOT."""
@@ -80,15 +82,22 @@ class EventLogPlugin:
         self._connect_attempted = False
 
     def _ensure_connected(self):
-        """Try to connect to the events DB (once)."""
+        """Try to connect to the events DB.
+
+        Retries until the DB file appears (fixtures may not have started yet).
+        Once the file exists and we attempt a connection, we don't retry on failure.
+        """
         if self.conn is not None:
             return True
         if self._connect_attempted:
             return False
-        self._connect_attempted = True
         db_path = _events_db_path()
         if not os.path.exists(db_path):
+            # DB doesn't exist yet — fixtures may not have started.
+            # Don't set _connect_attempted so we retry on the next test.
             return False
+        # DB file exists — this is our one real attempt.
+        self._connect_attempted = True
         try:
             self.conn = sqlite3.connect(db_path)
             self.conn.execute("PRAGMA busy_timeout=5000")
@@ -102,6 +111,7 @@ class EventLogPlugin:
             self.conn = None
             return False
 
+    @pytest.hookimpl(trylast=True)
     def pytest_runtest_setup(self, item):
         if not self._ensure_connected():
             return
