@@ -129,6 +129,74 @@ pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
     Ok(())
 }
 
+/// Idempotently ensure proxy redirect rules exist.
+/// Uses -C (check) before -A to avoid duplicates.
+pub fn ensure_proxy_redirect_rules(bridge: &str) -> Result<()> {
+    ensure_iptables_rule(
+        &["-t", "nat", "-i", bridge, "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-port", "10080"],
+        "REDIRECT port 80 → 10080",
+    )?;
+    ensure_iptables_rule(
+        &["-t", "nat", "-i", bridge, "-p", "tcp", "--dport", "443", "-j", "REDIRECT", "--to-port", "10443"],
+        "REDIRECT port 443 → 10443",
+    )?;
+    Ok(())
+}
+
+/// Idempotently ensure egress filter rules exist.
+pub fn ensure_egress_filter_rules(bridge: &str) -> Result<()> {
+    ensure_iptables_rule(
+        &["-t", "nat", "-i", bridge, "-p", "udp", "--dport", "53", "-j", "REDIRECT", "--to-port", "10053"],
+        "REDIRECT DNS UDP → 10053",
+    )?;
+    ensure_iptables_rule(
+        &["-t", "nat", "-i", bridge, "-p", "tcp", "--dport", "53", "-j", "REDIRECT", "--to-port", "10053"],
+        "REDIRECT DNS TCP → 10053",
+    )?;
+    ensure_iptables_rule(
+        &["-i", bridge, "-j", "DROP"],
+        "DROP all other forwarded traffic",
+    )?;
+    Ok(())
+}
+
+/// Check if an iptables rule exists (-C), and add it (-A) if not.
+/// The `args` should NOT include -A/-C or the chain — those are derived from the table flag.
+/// Actually, `args` is a flexible list: it must include `-t <table>` if nat, and the match spec.
+/// The chain is PREROUTING for nat rules, FORWARD otherwise.
+fn ensure_iptables_rule(args: &[&str], description: &str) -> Result<()> {
+    // Determine chain based on whether it's a nat rule
+    let (table_args, chain, match_args): (Vec<&str>, &str, Vec<&str>) = if args.len() >= 2 && args[0] == "-t" {
+        (args[..2].to_vec(), "PREROUTING", args[2..].to_vec())
+    } else {
+        (vec![], "FORWARD", args.to_vec())
+    };
+
+    // Check if rule exists
+    let mut check_cmd = table_args.clone();
+    check_cmd.push("-C");
+    check_cmd.push(chain);
+    check_cmd.extend(&match_args);
+
+    let output = Command::new("iptables")
+        .args(&check_cmd)
+        .output()
+        .context("Failed to execute iptables -C")?;
+
+    if output.status.success() {
+        info!("iptables: {} (already exists)", description);
+        return Ok(());
+    }
+
+    // Add the rule
+    let mut add_cmd = table_args;
+    add_cmd.push("-A");
+    add_cmd.push(chain);
+    add_cmd.extend(&match_args);
+
+    run_iptables(&add_cmd, description)
+}
+
 /// Remove proxy redirect and egress filter rules (best-effort, for cleanup).
 pub fn remove_proxy_rules(bridge: &str) {
     let rules: &[&[&str]] = &[

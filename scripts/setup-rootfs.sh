@@ -94,14 +94,14 @@ if [ -f "$CA_CERT" ]; then
     mkdir -p "$MOUNT_POINT/usr/local/share/ca-certificates"
     cp "$CA_CERT" "$MOUNT_POINT/usr/local/share/ca-certificates/clawpot-ca.crt"
 
-    # Try update-ca-certificates if available; otherwise manually append to bundle
+    # Try update-ca-certificates if available; otherwise set the CA bundle directly.
+    # We overwrite (not append) to avoid stacking up duplicate certs on repeated runs.
     if chroot "$MOUNT_POINT" which update-ca-certificates &>/dev/null; then
         chroot "$MOUNT_POINT" update-ca-certificates
     else
-        info "update-ca-certificates not available, manually updating CA bundle"
+        info "update-ca-certificates not available, manually setting CA bundle"
         mkdir -p "$MOUNT_POINT/etc/ssl/certs"
-        # Append to the system CA bundle (create if missing)
-        cat "$CA_CERT" >> "$MOUNT_POINT/etc/ssl/certs/ca-certificates.crt"
+        cp "$CA_CERT" "$MOUNT_POINT/etc/ssl/certs/ca-certificates.crt"
     fi
     info "CA certificate injected into trust store"
 else

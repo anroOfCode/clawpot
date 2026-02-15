@@ -191,4 +191,11 @@ impl FirecrackerClient {
             .await
             .context("Failed to set vsock device")
     }
+
+    /// Enable the entropy device (virtio-rng)
+    pub async fn set_entropy(&self, entropy: EntropyDevice) -> Result<()> {
+        self.put("/entropy", &entropy)
+            .await
+            .context("Failed to set entropy device")
+    }
 }

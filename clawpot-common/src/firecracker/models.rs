@@ -97,3 +97,7 @@ pub struct NetworkInterface {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub guest_mac: Option<String>,
 }
+
+/// Entropy device configuration (virtio-rng)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntropyDevice {}

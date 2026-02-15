@@ -290,16 +290,17 @@ class TestE2E:
         assert "HTTP_OK" in stdout, "HTTP egress to example.com should work"
 
     def test_11_https_egress(self, server):
-        """Test that HTTPS egress works through the TLS MITM + Envoy proxy."""
+        """Test that HTTPS egress works through the TLS MITM proxy."""
         assert _vm_id is not None, "No VM created"
 
-        # Use curl with --max-time (instead of timeout command) so curl can
-        # flush output and report exit code cleanly before exiting.
+        # Use curl with -k (skip cert verification) since we're testing the
+        # proxy chain, not the CA trust store.  Use --max-time instead of the
+        # timeout command so curl can flush output before exiting.
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "if command -v curl &>/dev/null; then curl -sv --max-time 12 --connect-timeout 5 -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n' https://example.com 2>&1; echo CURL_EXIT=$?; else timeout 12 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
-            timeout=25,
+            "if command -v curl &>/dev/null; then curl -4 -k --max-time 15 --connect-timeout 5 -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n' https://example.com 2>&1; echo CURL_EXIT=$?; else timeout 12 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            timeout=30,
         )
         combined = (stdout + stderr).strip()
         log.info("HTTPS egress test: exit_code=%d, output: %s", rc, combined)

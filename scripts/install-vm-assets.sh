@@ -19,7 +19,7 @@ KERNELS_DIR="$ASSETS_DIR/kernels"
 ROOTFS_DIR="$ASSETS_DIR/rootfs"
 
 # Asset URLs
-KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/x86_64/kernels/vmlinux.bin"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-5.10.223"
 ROOTFS_URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/ubuntu-22.04.ext4"
 
 # Target file paths
@@ -126,7 +126,8 @@ verify_rootfs() {
 }
 
 download_kernel() {
-    if [ -f "$KERNEL_PATH" ]; then
+    local url_marker="$KERNELS_DIR/.kernel_url"
+    if [ -f "$KERNEL_PATH" ] && [ -f "$url_marker" ] && [ "$(cat "$url_marker")" = "$KERNEL_URL" ]; then
         info "Kernel already exists at $KERNEL_PATH"
         if verify_kernel "$KERNEL_PATH"; then
             info "Existing kernel is valid, skipping download"
@@ -135,12 +136,16 @@ download_kernel() {
             warn "Existing kernel failed verification, re-downloading..."
             rm -f "$KERNEL_PATH"
         fi
+    elif [ -f "$KERNEL_PATH" ]; then
+        info "Kernel URL changed, re-downloading..."
+        rm -f "$KERNEL_PATH"
     fi
 
     mkdir -p "$KERNELS_DIR"
 
     if download_file "$KERNEL_URL" "$KERNEL_PATH" "kernel image"; then
         verify_kernel "$KERNEL_PATH"
+        echo "$KERNEL_URL" > "$KERNELS_DIR/.kernel_url"
     else
         error "Kernel download failed"
         return 1

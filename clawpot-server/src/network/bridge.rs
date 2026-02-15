@@ -20,6 +20,12 @@ pub fn ensure_bridge(name: &str, gateway_ip: IpAddr) -> Result<()> {
         info!("Bridge {} already exists", name);
     }
 
+    // Always ensure iptables rules and IP forwarding are set up,
+    // even if the bridge already existed (rules may have been flushed).
+    enable_ip_forwarding()?;
+    super::iptables::ensure_proxy_redirect_rules(name)?;
+    super::iptables::ensure_egress_filter_rules(name)?;
+
     Ok(())
 }
 
