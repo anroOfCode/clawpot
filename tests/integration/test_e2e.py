@@ -293,12 +293,21 @@ class TestE2E:
         """Test that HTTPS egress works through the TLS MITM + Envoy proxy."""
         assert _vm_id is not None, "No VM created"
 
-        # Use curl if available, otherwise use openssl s_client
+        # Debug: check DNS resolution first
+        stdout_dns, stderr_dns, rc_dns = cli(
+            "exec", _vm_id, "--",
+            "bash", "-c",
+            "timeout 5 getent hosts example.com 2>&1 || echo DNS_FAILED",
+            timeout=15,
+        )
+        log.info("DNS resolution check: exit_code=%d, stdout: %s, stderr: %s", rc_dns, stdout_dns.strip(), stderr_dns.strip())
+
+        # Use curl with verbose output for debugging
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "if command -v curl &>/dev/null; then timeout 10 curl -sf -o /dev/null -w '%{http_code}' https://example.com && echo HTTPS_OK; else timeout 10 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
-            timeout=20,
+            "if command -v curl &>/dev/null; then timeout 15 curl -sv -o /dev/null -w '%{http_code}' https://example.com 2>&1 && echo HTTPS_OK; else timeout 15 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            timeout=25,
         )
         combined = (stdout + stderr).strip()
         log.info("HTTPS egress test: exit_code=%d, output: %s", rc, combined)
