@@ -36,14 +36,16 @@ impl CertificateAuthority {
             info!("Loading existing CA from {}", ca_dir.display());
             let key_pem = std::fs::read_to_string(&key_path)
                 .context("Failed to read CA key")?;
-            let _cert_pem = std::fs::read_to_string(&cert_path)
+            let ca_cert_pem = std::fs::read_to_string(&cert_path)
                 .context("Failed to read CA cert")?;
 
             let ca_key = KeyPair::from_pem(&key_pem)
                 .context("Failed to parse CA key")?;
 
             // Re-generate the CA cert with the same key (rcgen 0.13 doesn't support
-            // loading existing certs, but the key is what matters for signing)
+            // loading existing certs, but the key is what matters for signing).
+            // We keep the original on-disk cert for the TLS chain so it matches
+            // the cert injected into VM trust stores by setup-rootfs.sh.
             let mut params = CertificateParams::default();
             params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
             let mut dn = DistinguishedName::new();
@@ -53,11 +55,6 @@ impl CertificateAuthority {
 
             let ca_cert = params.self_signed(&ca_key)
                 .context("Failed to self-sign CA cert")?;
-
-            // Update the cert file to match the regenerated cert
-            let ca_cert_pem = ca_cert.pem();
-            std::fs::write(&cert_path, &ca_cert_pem)
-                .context("Failed to update CA cert")?;
 
             (ca_cert, ca_key, ca_cert_pem)
         } else {

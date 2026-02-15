@@ -93,7 +93,16 @@ if [ -f "$CA_CERT" ]; then
     info "Injecting CA certificate for MITM proxy..."
     mkdir -p "$MOUNT_POINT/usr/local/share/ca-certificates"
     cp "$CA_CERT" "$MOUNT_POINT/usr/local/share/ca-certificates/clawpot-ca.crt"
-    chroot "$MOUNT_POINT" update-ca-certificates
+
+    # Try update-ca-certificates if available; otherwise set the CA bundle directly.
+    # We overwrite (not append) to avoid stacking up duplicate certs on repeated runs.
+    if chroot "$MOUNT_POINT" which update-ca-certificates &>/dev/null; then
+        chroot "$MOUNT_POINT" update-ca-certificates
+    else
+        info "update-ca-certificates not available, manually setting CA bundle"
+        mkdir -p "$MOUNT_POINT/etc/ssl/certs"
+        cp "$CA_CERT" "$MOUNT_POINT/etc/ssl/certs/ca-certificates.crt"
+    fi
     info "CA certificate injected into trust store"
 else
     info "No CA certificate found at $CA_CERT, skipping trust store injection"
@@ -102,7 +111,7 @@ fi
 # Set DNS resolver
 info "Configuring DNS resolver..."
 cat > "$MOUNT_POINT/etc/resolv.conf" << 'DNS'
-nameserver 8.8.8.8
+nameserver 192.168.100.1
 DNS
 
 info "Rootfs updated successfully with clawpot-agent!"

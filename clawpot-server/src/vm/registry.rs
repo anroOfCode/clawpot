@@ -111,6 +111,14 @@ impl VmRegistry {
         ))
     }
 
+    /// Find a VM by its IP address (reverse lookup for proxy source IP → vm_id)
+    pub async fn find_by_ip(&self, ip: IpAddr) -> Option<VmId> {
+        let vms = self.vms.read().await;
+        vms.iter()
+            .find(|(_, entry)| entry.ip_address == ip)
+            .map(|(id, _)| *id)
+    }
+
     /// Get the vsock UDS path for a VM
     pub async fn get_vsock_path(&self, id: &VmId) -> Result<String> {
         let vms = self.vms.read().await;

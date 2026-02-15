@@ -22,6 +22,12 @@ pub async fn ensure_bridge(handle: &Handle, name: &str, gateway_ip: IpAddr) -> R
         create_bridge(handle, name, gateway_ip).await?;
     }
 
+    // Always ensure iptables rules and IP forwarding are set up,
+    // even if the bridge already existed (rules may have been flushed).
+    enable_ip_forwarding()?;
+    super::iptables::ensure_proxy_redirect_rules(name)?;
+    super::iptables::ensure_egress_filter_rules(name)?;
+
     Ok(())
 }
 

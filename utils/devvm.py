@@ -502,6 +502,8 @@ def cmd_sync(args):
 
     run([
         "rsync", "-az", "--delete",
+        "--rsync-path", "sudo rsync",
+        "--chown", f"{SSH_USER}:{SSH_USER}",
         "--exclude", "target/",
         "--exclude", ".git/",
         "--exclude", "__pycache__/",
