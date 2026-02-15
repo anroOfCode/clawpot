@@ -18,6 +18,14 @@ CONN_ENV=""
 cleanup() {
     echo "--- :broom: Cleanup"
     if [ -n "$CONN_ENV" ] && [ -f "$CONN_ENV" ]; then
+        # Preserve console.log before destroying the VM
+        # shellcheck source=/dev/null
+        source "$CONN_ENV"
+        if [ -n "${INNER_VM_DIR:-}" ] && [ -f "$INNER_VM_DIR/console.log" ]; then
+            mkdir -p "$PROJECT_ROOT/artifacts"
+            cp "$INNER_VM_DIR/console.log" "$PROJECT_ROOT/artifacts/console.log"
+            echo "Saved console.log to artifacts/"
+        fi
         "$CI_DIR/destroy.sh" "$CONN_ENV"
     fi
 }
@@ -46,6 +54,24 @@ if [ ! -f "$GOLDEN_IMG" ] || [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
 else
     echo "Golden image is up to date"
 fi
+
+# --- Sweep orphaned inner VMs from previous runs ---
+echo "--- :broom: Sweep orphaned inner VMs"
+for pidfile in /tmp/inner-vm-*/qemu.pid; do
+    [ -f "$pidfile" ] || continue
+    orphan_pid=$(cat "$pidfile" 2>/dev/null) || continue
+    orphan_dir=$(dirname "$pidfile")
+    if kill -0 "$orphan_pid" 2>/dev/null; then
+        echo "Killing orphaned QEMU process $orphan_pid from $orphan_dir"
+        kill "$orphan_pid" 2>/dev/null || true
+        sleep 2
+        if kill -0 "$orphan_pid" 2>/dev/null; then
+            kill -9 "$orphan_pid" 2>/dev/null || true
+        fi
+    fi
+    echo "Removing orphaned VM directory $orphan_dir"
+    rm -rf "$orphan_dir"
+done
 
 # --- Launch inner VM ---
 echo "--- :rocket: Launch ephemeral inner VM"

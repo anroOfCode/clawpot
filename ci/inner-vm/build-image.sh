@@ -146,19 +146,25 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
     info "  ... waiting ($ELAPSED/${MAX_WAIT}s)"
 done
 
-# Give it a moment, then shut down
+# Determine whether QEMU exited on its own (cloud-init poweroff = success)
+# or was still running when the timeout expired (= failure)
+TIMED_OUT=false
 if kill -0 "$QEMU_PID" 2>/dev/null; then
-    info "Sending ACPI shutdown to golden image VM..."
+    TIMED_OUT=true
+    warn "QEMU still running after ${MAX_WAIT}s — cloud-init likely failed or hung"
     kill "$QEMU_PID" 2>/dev/null || true
     sleep 5
-    # Force kill if still running
     if kill -0 "$QEMU_PID" 2>/dev/null; then
         kill -9 "$QEMU_PID" 2>/dev/null || true
     fi
 fi
 
-# Remove the cloud-init disk from the image so it doesn't re-run on next boot
-# (The cloud-init data is baked in now)
+if [ "$TIMED_OUT" = true ]; then
+    error "Golden image build timed out — deleting incomplete image"
+    rm -f "$GOLDEN_IMG" "$GOLDEN_IMG.sha256"
+    exit 1
+fi
+
 info "Golden image built successfully"
 
 # Verify the image

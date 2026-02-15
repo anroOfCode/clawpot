@@ -86,6 +86,7 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     echo "Console log:" >&2
     tail -20 "$VM_DIR/console.log" >&2
     kill "$QEMU_PID" 2>/dev/null || true
+    rm -rf "$VM_DIR"
     exit 1
 fi
 
