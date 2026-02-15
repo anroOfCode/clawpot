@@ -17,5 +17,7 @@ steps:
     depends_on: "build"
     command: .buildkite/scripts/integration.sh
     timeout_in_minutes: 20
+    secrets:
+      - CLAWPOT_ANTHROPIC_API_KEY
     artifact_paths:
       - "artifacts/*"

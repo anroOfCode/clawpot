@@ -78,8 +78,9 @@ echo "Tarball uploaded"
 # --- Forward API key secrets to inner VM ---
 _secrets_file=$(mktemp)
 for _var in CLAWPOT_ANTHROPIC_API_KEY CLAWPOT_OPENAI_API_KEY; do
-    if [ -n "${!_var:-}" ]; then
-        printf 'export %s=%q\n' "$_var" "${!_var}" >> "$_secrets_file"
+    _val=$(buildkite-agent secret get "$_var" 2>/dev/null || true)
+    if [ -n "$_val" ]; then
+        printf 'export %s=%q\n' "$_var" "$_val" >> "$_secrets_file"
     fi
 done
 if [ -s "$_secrets_file" ]; then
