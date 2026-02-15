@@ -59,7 +59,8 @@ impl LlmKeyStore {
     pub fn from_env() -> Self {
         let mut keys = HashMap::new();
         for provider in PROVIDERS {
-            if let Ok(key) = env::var(provider.env_var) {
+            if let Ok(raw_key) = env::var(provider.env_var) {
+                let key = raw_key.trim().to_string();
                 if !key.is_empty() {
                     info!(
                         "Loaded API key for {} from {} ({} chars)",
