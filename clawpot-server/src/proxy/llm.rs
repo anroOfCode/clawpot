@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::env;
+use tracing::info;
 
 /// An LLM API provider (e.g. Anthropic, OpenAI).
 struct LlmProvider {
@@ -60,9 +61,18 @@ impl LlmKeyStore {
         for provider in PROVIDERS {
             if let Ok(key) = env::var(provider.env_var) {
                 if !key.is_empty() {
+                    info!(
+                        "Loaded API key for {} from {} ({} chars)",
+                        provider.name,
+                        provider.env_var,
+                        key.len()
+                    );
                     keys.insert(provider.name.to_string(), key);
                 }
             }
+        }
+        if keys.is_empty() {
+            info!("No LLM API keys configured");
         }
         Self { keys }
     }
