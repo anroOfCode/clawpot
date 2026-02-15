@@ -78,11 +78,11 @@ echo "Tarball uploaded"
 # --- Forward API key secrets to inner VM ---
 # The pipeline.yml `secrets:` block exposes secrets as env vars.
 # We write them to a file, SCP it to the inner VM, and source it there.
+# Use `declare -p` for reliable serialization of values with special chars.
 _secrets_file=$(mktemp)
 for _var in CLAWPOT_ANTHROPIC_API_KEY CLAWPOT_OPENAI_API_KEY; do
-    _val="${!_var:-}"
-    if [ -n "$_val" ]; then
-        printf 'export %s=%q\n' "$_var" "$_val" >> "$_secrets_file"
+    if [ -n "${!_var:-}" ]; then
+        declare -p "$_var" >> "$_secrets_file"
     fi
 done
 if [ -s "$_secrets_file" ]; then

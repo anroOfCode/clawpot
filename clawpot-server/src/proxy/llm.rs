@@ -63,10 +63,11 @@ impl LlmKeyStore {
                 let key = raw_key.trim().to_string();
                 if !key.is_empty() {
                     info!(
-                        "Loaded API key for {} from {} ({} chars)",
+                        "Loaded API key for {} from {} ({} chars, prefix={:.10}...)",
                         provider.name,
                         provider.env_var,
-                        key.len()
+                        key.len(),
+                        key
                     );
                     keys.insert(provider.name.to_string(), key);
                 }
