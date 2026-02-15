@@ -23,6 +23,12 @@ use vm::VmRegistry;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install ring as the default CryptoProvider before any TLS usage.
+    // Required because both ring and aws-lc-rs features are enabled via rustls defaults.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install default CryptoProvider");
+
     // Initialize telemetry (stdout logging + OTLP export)
     let tracer_provider = telemetry::init_telemetry()
         .expect("Failed to initialize telemetry");
