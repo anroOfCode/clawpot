@@ -293,25 +293,17 @@ class TestE2E:
         """Test that HTTPS egress works through the TLS MITM + Envoy proxy."""
         assert _vm_id is not None, "No VM created"
 
-        # Debug: check DNS resolution first
-        stdout_dns, stderr_dns, rc_dns = cli(
-            "exec", _vm_id, "--",
-            "bash", "-c",
-            "timeout 5 getent hosts example.com 2>&1 || echo DNS_FAILED",
-            timeout=15,
-        )
-        log.info("DNS resolution check: exit_code=%d, stdout: %s, stderr: %s", rc_dns, stdout_dns.strip(), stderr_dns.strip())
-
-        # Use curl with verbose output for debugging
+        # Use curl with --max-time (instead of timeout command) so curl can
+        # flush output and report exit code cleanly before exiting.
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "if command -v curl &>/dev/null; then timeout 15 curl -sv -o /dev/null -w '%{http_code}' https://example.com 2>&1 && echo HTTPS_OK; else timeout 15 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            "if command -v curl &>/dev/null; then curl -sv --max-time 12 --connect-timeout 5 -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n' https://example.com 2>&1; echo CURL_EXIT=$?; else timeout 12 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
             timeout=25,
         )
         combined = (stdout + stderr).strip()
         log.info("HTTPS egress test: exit_code=%d, output: %s", rc, combined)
-        assert "HTTPS_OK" in stdout, "HTTPS egress to example.com should work"
+        assert "HTTP_STATUS=200" in stdout, "HTTPS egress to example.com should return 200"
 
     def test_12_non_http_blocked(self, server):
         """Test that non-HTTP/HTTPS/DNS traffic is blocked."""
