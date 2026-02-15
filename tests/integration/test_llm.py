@@ -164,7 +164,7 @@ class TestLlm:
 
         request_body = json.dumps(
             {
-                "model": "claude-haiku-4-5-20250514",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 32,
                 "messages": [{"role": "user", "content": "Say hello in exactly 3 words."}],
             }
@@ -207,7 +207,7 @@ class TestLlm:
 
         request_body = json.dumps(
             {
-                "model": "claude-haiku-4-5-20250514",
+                "model": "claude-haiku-4-5-20251001",
                 "max_tokens": 32,
                 "stream": True,
                 "messages": [{"role": "user", "content": "Count from 1 to 5."}],
@@ -261,7 +261,7 @@ class TestLlm:
         non_stream_req = requests[0]
         assert non_stream_req["data"]["provider"] == "anthropic"
         assert non_stream_req["data"]["endpoint"] == "messages"
-        assert non_stream_req["data"]["model"] == "claude-haiku-4-5-20250514"
+        assert non_stream_req["data"]["model"] == "claude-haiku-4-5-20251001"
         assert non_stream_req["data"]["message_count"] == 1
         assert non_stream_req["data"].get("streaming") is None  # stream not set
         assert non_stream_req["correlation_id"] is not None
