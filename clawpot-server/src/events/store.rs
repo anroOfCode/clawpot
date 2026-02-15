@@ -396,23 +396,24 @@ async fn background_writer(
                 batch.push(record);
             }
             Some(WriterMsg::Close { resp }) => {
-                // Flush any remaining events, then close session
-                flush_batch(&conn, &session_id, &mut batch);
-                close_session_row(&conn, &session_id);
-                let _ = resp.send(());
-                // Drain any remaining events in the channel
+                // Drain any remaining events in the channel before flushing
                 while let Ok(msg) = rx.try_recv() {
                     if let WriterMsg::Event(record) = msg {
                         batch.push(record);
                     }
                 }
+                // Flush all events, close session, checkpoint WAL, then respond
                 flush_batch(&conn, &session_id, &mut batch);
+                close_session_row(&conn, &session_id);
+                checkpoint_wal(&conn);
+                let _ = resp.send(());
                 return;
             }
             None => {
                 // Channel closed without explicit close — flush and exit
                 flush_batch(&conn, &session_id, &mut batch);
                 close_session_row(&conn, &session_id);
+                checkpoint_wal(&conn);
                 return;
             }
         }
@@ -424,6 +425,7 @@ async fn background_writer(
                 Ok(WriterMsg::Close { resp }) => {
                     flush_batch(&conn, &session_id, &mut batch);
                     close_session_row(&conn, &session_id);
+                    checkpoint_wal(&conn);
                     let _ = resp.send(());
                     return;
                 }
@@ -478,6 +480,14 @@ fn flush_batch_inner(conn: &Connection, session_id: &str, batch: &[EventRecord])
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Checkpoint WAL into the main database file so that read-only connections
+/// (e.g. the CLI) can see all committed data without needing WAL recovery.
+fn checkpoint_wal(conn: &Connection) {
+    if let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        eprintln!("EventStore: WAL checkpoint failed: {e}");
+    }
 }
 
 fn close_session_row(conn: &Connection, session_id: &str) {

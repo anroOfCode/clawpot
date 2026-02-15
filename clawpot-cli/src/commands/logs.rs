@@ -31,13 +31,12 @@ struct Event {
 }
 
 fn open_db(path: &str) -> Result<Connection> {
-    let conn = Connection::open_with_flags(
-        path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("Failed to open events DB at {path}"))?;
-    conn.execute_batch("PRAGMA busy_timeout=5000;")
-        .context("Failed to set busy timeout")?;
+    // Open in read-write mode so we can recover WAL data if the -wal file
+    // exists but hasn't been checkpointed (read-only can't create -shm).
+    let conn = Connection::open(path)
+        .with_context(|| format!("Failed to open events DB at {path}"))?;
+    conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA query_only=ON;")
+        .context("Failed to set pragmas")?;
     Ok(conn)
 }
 
