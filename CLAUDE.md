@@ -9,6 +9,15 @@ cargo build --workspace                                                    # deb
 cargo build --release --target x86_64-unknown-linux-musl -p clawpot-agent  # static agent binary
 ```
 
+## Lint
+
+```bash
+bash scripts/lint.sh          # check mode — exits non-zero on any issue
+bash scripts/lint.sh --fix    # auto-fix formatting and simple lint issues
+```
+
+This runs rustfmt, clippy (with `-D warnings`), and ruff (lint + format) on the Python integration tests. **Always run this before committing.**
+
 ## Test
 
 ### Unit tests
@@ -85,11 +94,12 @@ Direct commits to the main branch are disabled. All changes must be submitted vi
 The process for making changes is:
 
 1. Create a feature branch and make your changes.
-2. Run `cargo test --workspace` locally to catch unit test failures early.
-3. Commit your changes and push the branch.
-4. Open a pull request.
-5. Monitor the CI build with `python utils/monitor_build.py HEAD` and wait for it to complete. If it fails, read the logs, fix the issues, push again, and re-run the monitor. **A task is not complete until CI passes.** Do not move on or consider work done while the build is failing.
-6. If you need to make follow-up changes after the PR is open, push additional commits and run `python utils/monitor_build.py HEAD` again each time.
+2. Run `bash scripts/lint.sh --fix` to auto-format, then `bash scripts/lint.sh` to verify no remaining warnings.
+3. Run `cargo test --workspace` locally to catch unit test failures early.
+4. Commit your changes and push the branch.
+5. Open a pull request.
+6. Monitor the CI build with `python utils/monitor_build.py HEAD` and wait for it to complete. If it fails, read the logs, fix the issues, push again, and re-run the monitor. **A task is not complete until CI passes.** Do not move on or consider work done while the build is failing.
+7. If you need to make follow-up changes after the PR is open, push additional commits and run `python utils/monitor_build.py HEAD` again each time.
 
 ## Project structure
 
