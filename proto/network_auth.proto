@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package clawpot.network.v1;
+
+service NetworkAuthorizationService {
+  rpc Authorize(NetworkAuthorizationRequest) returns (NetworkAuthorizationResponse);
+}
+
+message NetworkAuthorizationRequest {
+  string request_id = 1;
+  string vm_id = 2;
+  string timestamp = 3;
+
+  oneof request {
+    HttpRequest http = 10;
+    DnsRequest dns = 11;
+  }
+}
+
+message HttpRequest {
+  string method = 1;
+  string url = 2;
+  map<string, string> headers = 3;
+  bytes body = 4;
+  bool body_truncated = 5;
+}
+
+message DnsRequest {
+  string query_name = 1;
+  string query_type = 2;
+}
+
+message NetworkAuthorizationResponse {
+  bool allow = 1;
+  string reason = 2;
+}

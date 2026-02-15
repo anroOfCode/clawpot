@@ -262,18 +262,18 @@ class TestE2E:
 
         stdout_dns, _, _ = cli("exec", _vm_id, "--", "cat", "/etc/resolv.conf")
         log.info("VM DNS config:\n%s", stdout_dns.strip())
-        assert "8.8.8.8" in stdout_dns, "Expected nameserver 8.8.8.8 in resolv.conf"
+        assert "192.168.100.1" in stdout_dns, "Expected nameserver 192.168.100.1 in resolv.conf"
 
-        # Resolve a well-known domain via DNS
+        # Test DNS resolution via the DNS proxy (resolves through gateway)
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "timeout 10 bash -c '(echo > /dev/tcp/8.8.8.8/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
+            "timeout 10 bash -c '(echo > /dev/tcp/192.168.100.1/53) 2>/dev/null && echo DNS_REACHABLE || echo DNS_UNREACHABLE'",
             timeout=20,
         )
         combined = (stdout + stderr).strip()
         log.info("DNS connectivity test: exit_code=%d, output: %s", rc, combined)
-        assert "DNS_REACHABLE" in stdout, "DNS server (8.8.8.8:53) should be reachable"
+        assert "DNS_REACHABLE" in stdout, "DNS proxy (192.168.100.1:53) should be reachable"
 
     def test_10_http_egress(self, server):
         """Test that HTTP egress works through the Envoy proxy."""
@@ -290,19 +290,21 @@ class TestE2E:
         assert "HTTP_OK" in stdout, "HTTP egress to example.com should work"
 
     def test_11_https_egress(self, server):
-        """Test that HTTPS egress works through the TLS MITM + Envoy proxy."""
+        """Test that HTTPS egress works through the TLS MITM proxy."""
         assert _vm_id is not None, "No VM created"
 
-        # Use curl if available, otherwise use openssl s_client
+        # Use curl with -k (skip cert verification) since we're testing the
+        # proxy chain, not the CA trust store.  Use --max-time instead of the
+        # timeout command so curl can flush output before exiting.
         stdout, stderr, rc = cli(
             "exec", _vm_id, "--",
             "bash", "-c",
-            "if command -v curl &>/dev/null; then timeout 10 curl -sf -o /dev/null -w '%{http_code}' https://example.com && echo HTTPS_OK; else timeout 10 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
-            timeout=20,
+            "if command -v curl &>/dev/null; then curl -4 -k --max-time 15 --connect-timeout 5 -o /dev/null -w 'HTTP_STATUS=%{http_code}\\n' https://example.com 2>&1; echo CURL_EXIT=$?; else timeout 12 bash -c '(echo > /dev/tcp/example.com/443) 2>/dev/null && echo HTTPS_OK || echo HTTPS_FAIL'; fi",
+            timeout=30,
         )
         combined = (stdout + stderr).strip()
         log.info("HTTPS egress test: exit_code=%d, output: %s", rc, combined)
-        assert "HTTPS_OK" in stdout, "HTTPS egress to example.com should work"
+        assert "HTTP_STATUS=200" in stdout, "HTTPS egress to example.com should return 200"
 
     def test_12_non_http_blocked(self, server):
         """Test that non-HTTP/HTTPS/DNS traffic is blocked."""

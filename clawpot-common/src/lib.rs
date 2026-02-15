@@ -1,5 +1,6 @@
 pub mod agent_proto;
 pub mod firecracker;
+pub mod network_auth_proto;
 pub mod proto;
 pub mod types;
 pub mod vm;

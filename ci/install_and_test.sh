@@ -44,6 +44,22 @@ ls -l target/debug/clawpot-server
 ls -l target/debug/clawpot
 ls -l target/x86_64-unknown-linux-musl/release/clawpot-agent
 
+# --- Pre-generate CA certificate for rootfs trust store injection ---
+# The server generates the CA at startup, but setup-rootfs.sh needs it before
+# the server runs in order to inject it into the VM's trust store.
+
+echo "--- Pre-generating CA certificate"
+if [ ! -f "ca/ca.crt" ]; then
+    mkdir -p ca
+    openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca/ca.key
+    openssl req -new -x509 -key ca/ca.key -out ca/ca.crt -days 3650 \
+        -subj "/CN=Clawpot MITM CA/O=Clawpot" \
+        -addext "basicConstraints=critical,CA:TRUE"
+    echo "CA certificate generated"
+else
+    echo "CA certificate already exists"
+fi
+
 # --- Prepare rootfs ---
 
 echo "--- Embedding clawpot-agent into rootfs"

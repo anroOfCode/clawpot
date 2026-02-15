@@ -88,31 +88,24 @@ pub fn add_proxy_redirect_rules(bridge: &str) -> Result<()> {
     Ok(())
 }
 
-/// Add iptables rules to allow DNS through and block all other egress.
+/// Add iptables rules to redirect DNS to the proxy and block all other egress.
 /// Called once at bridge setup time.
 pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
     let ipt = ipt_new()?;
 
-    // Allow DNS (UDP) forwarding
-    let rule = format!("-i {} -p udp --dport 53 -j ACCEPT", bridge);
-    ipt_append(&ipt, "filter", "FORWARD", &rule, "ACCEPT DNS UDP forward")?;
+    // Redirect DNS (UDP) to DNS proxy
+    let rule = format!(
+        "-i {} -p udp --dport 53 -j REDIRECT --to-port 10053",
+        bridge
+    );
+    ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT DNS UDP → 10053")?;
 
-    // Allow DNS (TCP) forwarding
-    let rule = format!("-i {} -p tcp --dport 53 -j ACCEPT", bridge);
-    ipt_append(&ipt, "filter", "FORWARD", &rule, "ACCEPT DNS TCP forward")?;
-
-    // MASQUERADE DNS traffic so it can reach external resolvers
-    ipt_append(
-        &ipt, "nat", "POSTROUTING",
-        "-s 192.168.100.0/24 -p udp --dport 53 -j MASQUERADE",
-        "MASQUERADE DNS UDP",
-    )?;
-
-    ipt_append(
-        &ipt, "nat", "POSTROUTING",
-        "-s 192.168.100.0/24 -p tcp --dport 53 -j MASQUERADE",
-        "MASQUERADE DNS TCP",
-    )?;
+    // Redirect DNS (TCP) to DNS proxy
+    let rule = format!(
+        "-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053",
+        bridge
+    );
+    ipt_append(&ipt, "nat", "PREROUTING", &rule, "REDIRECT DNS TCP → 10053")?;
 
     // Drop all other forwarded traffic from the bridge (must be last)
     let rule = format!("-i {} -j DROP", bridge);
@@ -120,6 +113,71 @@ pub fn add_egress_filter_rules(bridge: &str) -> Result<()> {
 
     info!("Egress filter rules added for bridge {}", bridge);
     Ok(())
+}
+
+/// Idempotently ensure proxy redirect rules exist.
+/// Uses iptables crate's `exists` check before appending to avoid duplicates.
+pub fn ensure_proxy_redirect_rules(bridge: &str) -> Result<()> {
+    let ipt = ipt_new()?;
+
+    let rules: &[(&str, &str, String, &str)] = &[
+        (
+            "nat", "PREROUTING",
+            format!("-i {} -p tcp --dport 80 -j REDIRECT --to-port 10080", bridge),
+            "REDIRECT port 80 → 10080",
+        ),
+        (
+            "nat", "PREROUTING",
+            format!("-i {} -p tcp --dport 443 -j REDIRECT --to-port 10443", bridge),
+            "REDIRECT port 443 → 10443",
+        ),
+    ];
+
+    for (table, chain, rule, desc) in rules {
+        ensure_iptables_rule(&ipt, table, chain, rule, desc)?;
+    }
+    Ok(())
+}
+
+/// Idempotently ensure egress filter rules exist.
+pub fn ensure_egress_filter_rules(bridge: &str) -> Result<()> {
+    let ipt = ipt_new()?;
+
+    let rules: &[(&str, &str, String, &str)] = &[
+        (
+            "nat", "PREROUTING",
+            format!("-i {} -p udp --dport 53 -j REDIRECT --to-port 10053", bridge),
+            "REDIRECT DNS UDP → 10053",
+        ),
+        (
+            "nat", "PREROUTING",
+            format!("-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053", bridge),
+            "REDIRECT DNS TCP → 10053",
+        ),
+        (
+            "filter", "FORWARD",
+            format!("-i {} -j DROP", bridge),
+            "DROP all other forwarded traffic",
+        ),
+    ];
+
+    for (table, chain, rule, desc) in rules {
+        ensure_iptables_rule(&ipt, table, chain, rule, desc)?;
+    }
+    Ok(())
+}
+
+/// Check if an iptables rule exists, and add it if not.
+fn ensure_iptables_rule(ipt: &iptables::IPTables, table: &str, chain: &str, rule: &str, description: &str) -> Result<()> {
+    let exists = ipt.exists(table, chain, rule)
+        .map_err(|e| anyhow::anyhow!("iptables exists check for '{}' failed: {}", description, e))?;
+
+    if exists {
+        info!("iptables: {} (already exists)", description);
+        return Ok(());
+    }
+
+    ipt_append(ipt, table, chain, rule, description)
 }
 
 /// Remove proxy redirect and egress filter rules (best-effort, for cleanup).
@@ -150,24 +208,20 @@ pub fn remove_proxy_rules(bridge: &str) {
             ),
         ),
         (
-            "filter",
-            "FORWARD",
-            format!("-i {} -p udp --dport 53 -j ACCEPT", bridge),
-        ),
-        (
-            "filter",
-            "FORWARD",
-            format!("-i {} -p tcp --dport 53 -j ACCEPT", bridge),
+            "nat",
+            "PREROUTING",
+            format!(
+                "-i {} -p udp --dport 53 -j REDIRECT --to-port 10053",
+                bridge
+            ),
         ),
         (
             "nat",
-            "POSTROUTING",
-            "-s 192.168.100.0/24 -p udp --dport 53 -j MASQUERADE".to_string(),
-        ),
-        (
-            "nat",
-            "POSTROUTING",
-            "-s 192.168.100.0/24 -p tcp --dport 53 -j MASQUERADE".to_string(),
+            "PREROUTING",
+            format!(
+                "-i {} -p tcp --dport 53 -j REDIRECT --to-port 10053",
+                bridge
+            ),
         ),
         (
             "filter",

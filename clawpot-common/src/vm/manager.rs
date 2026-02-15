@@ -206,6 +206,13 @@ impl VmManager {
                 .context("Failed to set network interface")?;
         }
 
+        // Enable entropy device (virtio-rng) for TLS and other crypto operations
+        debug!("Enabling entropy device (virtio-rng)");
+        self.client
+            .set_entropy(crate::firecracker::EntropyDevice {})
+            .await
+            .context("Failed to enable entropy device")?;
+
         // Set vsock device if configured
         if let (Some(guest_cid), Some(uds_path)) =
             (config.guest_cid, &config.vsock_uds_path)
